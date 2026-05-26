@@ -21,46 +21,64 @@
 </head>
 <body>
   <div id="root"></div>
-
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect } = React;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // CONFIGURATION
-    // SETUP_CODE: used only the very first time to create your password.
-    // It is NOT your password — change it if you want after first login.
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── CONFIG ────────────────────────────────────────────────────────────────
     const SETUP_CODE = "U3J1KaeE";
 
-    // ─── Crypto ───────────────────────────────────────────────────────────────
+    // ── Crypto ────────────────────────────────────────────────────────────────
     async function sha256(str) {
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
       return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
     }
 
-    // ─── Storage (localStorage) ───────────────────────────────────────────────
+    // ── LocalStorage ─────────────────────────────────────────────────────────
     const LS = {
-      get(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
-      set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+      get(k)    { try { const v=localStorage.getItem(k); return v?JSON.parse(v):null; } catch { return null; } },
+      set(k,v)  { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} },
       remove(k) { try { localStorage.removeItem(k); } catch {} },
     };
 
-    // ─── Utilities ────────────────────────────────────────────────────────────
+    // ── Utilities ─────────────────────────────────────────────────────────────
     const fmt = (n) =>
-      new Intl.NumberFormat("es-MX", { style:"currency", currency:"MXN", maximumFractionDigits:0 }).format(Math.abs(n));
+      new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",maximumFractionDigits:0}).format(Math.abs(n));
     const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-    const todayISO = () => new Date().toISOString().split("T")[0];
-    const getMonthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const todayISO   = () => new Date().toISOString().split("T")[0];
+    const getMonthKey= (d=new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const monthLabel = (k) => { const [y,m]=k.split("-"); return `${MONTHS[+m-1]} ${y}`; };
-    const dayLabel = (iso) => { const p=iso.split("-"); return `${+p[2]} ${MONTHS[+p[1]-1].slice(0,3)}`; };
-    const prevKey = (k) => { const [y,m]=k.split("-").map(Number); const d=new Date(y,m-2,1); return getMonthKey(d); };
-    const nextKey = (k) => { const [y,m]=k.split("-").map(Number); const d=new Date(y,m,1); return getMonthKey(d); };
+    const dayLabel   = (iso) => { const p=iso.split("-"); return `${+p[2]} ${MONTHS[+p[1]-1].slice(0,3)}`; };
+    const prevKey    = (k) => { const [y,m]=k.split("-").map(Number); return getMonthKey(new Date(y,m-2,1)); };
+    const nextKey    = (k) => { const [y,m]=k.split("-").map(Number); return getMonthKey(new Date(y,m,1)); };
 
-    // ─── Defaults ─────────────────────────────────────────────────────────────
+    // ── Billing cycle logic ───────────────────────────────────────────────────
+    // Given a purchase date and a card's cutDay, returns the YYYY-MM when
+    // the charge will actually be paid (and thus counted in budget).
+    // Cash/debit cards have cutDay=null → billing month = purchase month.
+    function getBillingMonth(dateISO, cutDay) {
+      if (!cutDay) return dateISO.slice(0,7); // cash/debit: same month
+      const [y,m,d] = dateISO.split("-").map(Number);
+      // if purchase day <= cutDay → cycle closes this month → paid NEXT month
+      // if purchase day >  cutDay → cycle closes next month → paid MONTH AFTER NEXT
+      const monthsAhead = d <= cutDay ? 1 : 2;
+      const payDate = new Date(y, m - 1 + monthsAhead, 1);
+      return getMonthKey(payDate);
+    }
+
+    // ── Defaults ──────────────────────────────────────────────────────────────
+    const DEFAULT_CARDS = [
+      { id:"amex",     name:"Amex",     cutDay:17, payDay:6  },
+      { id:"banamex",  name:"Banamex",  cutDay:14, payDay:3  },
+      { id:"invex",    name:"Invex",    cutDay:26, payDay:16 },
+      { id:"nu",       name:"Nu",       cutDay:26, payDay:1  },
+      { id:"efectivo", name:"Efectivo", cutDay:null, payDay:null },
+    ];
+
     const DEFAULTS = {
       salary: 57000,
-      fixed: { Amex: 13588, Invex: 5760, "Banbajío": 5563, Renta: 13300 },
-      budgets: { despensa: 6000, entretenimiento: 3000, servicios: 1000, salud: 0, otros: 0 },
+      fixed: { Amex:13588, Invex:5760, Banamex:5563, Renta:13300 },
+      budgets: { despensa:6000, entretenimiento:3000, servicios:1000, salud:0, otros:0 },
+      cards: DEFAULT_CARDS,
     };
 
     const CATS = [
@@ -71,15 +89,14 @@
       { id:"otros",           label:"Otros",           icon:"📦", color:"#9ca3af" },
     ];
 
-    // ─── Shared Styles ────────────────────────────────────────────────────────
-    const card = { background:"#161920", border:"1px solid #252830", borderRadius:"14px", padding:"16px" };
-    const navBtn = { background:"#161920", border:"1px solid #252830", borderRadius:"10px", color:"#9ca3af", fontSize:"20px", width:"38px", height:"38px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
-    const inputSt = { background:"#1c1f27", border:"1px solid #252830", borderRadius:"8px", padding:"10px 14px", color:"#e8e4dc", fontSize:"15px", outline:"none", width:"100%" };
+    // ── Shared styles ─────────────────────────────────────────────────────────
+    const card  = { background:"#161920", border:"1px solid #252830", borderRadius:"14px", padding:"16px" };
+    const navBtn= { background:"#161920", border:"1px solid #252830", borderRadius:"10px", color:"#9ca3af", fontSize:"20px", width:"38px", height:"38px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
+    const inputSt={ background:"#1c1f27", border:"1px solid #252830", borderRadius:"8px", padding:"10px 14px", color:"#e8e4dc", fontSize:"15px", outline:"none", width:"100%" };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // AUTH SCREENS
+    // AUTH
     // ─────────────────────────────────────────────────────────────────────────
-
     function AuthShell({ children }) {
       return (
         <div style={{ background:"#0f1117", minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px" }}>
@@ -87,94 +104,62 @@
             <div style={{ fontSize:"32px", marginBottom:"8px" }}>💰</div>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"3px" }}>MI PRESUPUESTO</div>
           </div>
-          <div style={{ ...card, width:"100%", maxWidth:"360px" }}>
-            {children}
-          </div>
+          <div style={{ ...card, width:"100%", maxWidth:"360px" }}>{children}</div>
         </div>
       );
     }
 
-    // First-time setup screen
     function SetupScreen({ onDone }) {
-      const [code, setCode]       = useState("");
-      const [pw, setPw]           = useState("");
-      const [pw2, setPw2]         = useState("");
-      const [error, setError]     = useState("");
-      const [loading, setLoading] = useState(false);
-
-      const handleSetup = async () => {
-        setError("");
-        if (code !== SETUP_CODE)      { setError("Código de configuración incorrecto."); return; }
-        if (pw.length < 6)            { setError("La contraseña debe tener al menos 6 caracteres."); return; }
-        if (pw !== pw2)               { setError("Las contraseñas no coinciden."); return; }
+      const [code,setCode]=useState(""), [pw,setPw]=useState(""), [pw2,setPw2]=useState(""), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
+      const go = async () => {
+        setErr("");
+        if (code!==SETUP_CODE)  { setErr("Código de configuración incorrecto."); return; }
+        if (pw.length<6)        { setErr("Mínimo 6 caracteres."); return; }
+        if (pw!==pw2)           { setErr("Las contraseñas no coinciden."); return; }
         setLoading(true);
-        const hash = await sha256(pw);
-        LS.set("budget:pwHash", hash);
-        sessionStorage.setItem("budget:authed", "1");
-        setLoading(false);
-        onDone();
+        LS.set("budget:pwHash", await sha256(pw));
+        sessionStorage.setItem("budget:authed","1");
+        setLoading(false); onDone();
       };
-
       return (
         <AuthShell>
-          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>CONFIGURACIÓN INICIAL</div>
-          <p style={{ fontSize:"13px", color:"#6b7280", marginBottom:"20px", lineHeight:"1.6" }}>
-            Primera vez que abres la app. Ingresa el código de configuración y crea tu contraseña.
-          </p>
-          {[
-            { label:"CÓDIGO DE CONFIGURACIÓN", val:code, set:setCode, type:"text", ph:"········" },
-            { label:"CONTRASEÑA NUEVA",         val:pw,   set:setPw,   type:"password", ph:"mínimo 6 caracteres" },
-            { label:"CONFIRMAR CONTRASEÑA",     val:pw2,  set:setPw2,  type:"password", ph:"repite tu contraseña" },
-          ].map(f => (
-            <div key={f.label} style={{ marginBottom:"14px" }}>
-              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"6px" }}>{f.label}</div>
-              <input type={f.type} value={f.val} onChange={e=>f.set(e.target.value)} placeholder={f.ph}
-                onKeyDown={e=>{ if(e.key==="Enter") handleSetup(); }}
-                style={{ ...inputSt, fontFamily: f.type==="password"?"monospace":"inherit" }} />
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>CONFIGURACIÓN INICIAL</div>
+          <p style={{ fontSize:"13px", color:"#6b7280", marginBottom:"18px", lineHeight:"1.6" }}>Primera vez. Ingresa el código de configuración y crea tu contraseña.</p>
+          {[{l:"CÓDIGO DE CONFIGURACIÓN",v:code,s:setCode,t:"text",p:"········"},
+            {l:"CONTRASEÑA NUEVA",v:pw,s:setPw,t:"password",p:"mínimo 6 caracteres"},
+            {l:"CONFIRMAR CONTRASEÑA",v:pw2,s:setPw2,t:"password",p:"repite tu contraseña"}].map(f=>(
+            <div key={f.l} style={{ marginBottom:"12px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>{f.l}</div>
+              <input type={f.t} value={f.v} onChange={e=>f.s(e.target.value)} placeholder={f.p} onKeyDown={e=>e.key==="Enter"&&go()}
+                style={{ ...inputSt, fontFamily:f.t==="password"?"monospace":"inherit" }} />
             </div>
           ))}
-          {error && <div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"14px", fontFamily:"monospace" }}>{error}</div>}
-          <button onClick={handleSetup} disabled={loading}
-            style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer", letterSpacing:"1px" }}>
-            {loading ? "CREANDO..." : "CREAR CONTRASEÑA"}
+          {err&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"12px", fontFamily:"monospace" }}>{err}</div>}
+          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>
+            {loading?"CREANDO...":"CREAR CONTRASEÑA"}
           </button>
         </AuthShell>
       );
     }
 
-    // Login screen
     function LoginScreen({ onLogin }) {
-      const [pw, setPw]           = useState("");
-      const [error, setError]     = useState("");
-      const [loading, setLoading] = useState(false);
-
-      const handleLogin = async () => {
-        setError("");
-        setLoading(true);
-        const hash = await sha256(pw);
-        const stored = LS.get("budget:pwHash");
-        if (hash === stored) {
-          sessionStorage.setItem("budget:authed", "1");
-          onLogin();
-        } else {
-          setError("Contraseña incorrecta.");
-        }
+      const [pw,setPw]=useState(""), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
+      const go = async () => {
+        setErr(""); setLoading(true);
+        if (await sha256(pw) === LS.get("budget:pwHash")) {
+          sessionStorage.setItem("budget:authed","1"); onLogin();
+        } else { setErr("Contraseña incorrecta."); }
         setLoading(false);
       };
-
       return (
         <AuthShell>
-          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>INICIAR SESIÓN</div>
-          <div style={{ marginBottom:"6px", fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>CONTRASEÑA</div>
-          <input type="password" value={pw} onChange={e=>{ setPw(e.target.value); setError(""); }}
-            placeholder="tu contraseña"
-            onKeyDown={e=>{ if(e.key==="Enter") handleLogin(); }}
-            autoFocus
-            style={{ ...inputSt, fontFamily:"monospace", marginBottom:"14px" }} />
-          {error && <div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"14px", fontFamily:"monospace" }}>{error}</div>}
-          <button onClick={handleLogin} disabled={loading}
-            style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer", letterSpacing:"1px" }}>
-            {loading ? "..." : "ENTRAR"}
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>INICIAR SESIÓN</div>
+          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>CONTRASEÑA</div>
+          <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} placeholder="tu contraseña"
+            onKeyDown={e=>e.key==="Enter"&&go()} autoFocus style={{ ...inputSt, fontFamily:"monospace", marginBottom:"12px" }} />
+          {err&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"12px", fontFamily:"monospace" }}>{err}</div>}
+          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>
+            {loading?"...":"ENTRAR"}
           </button>
         </AuthShell>
       );
@@ -183,7 +168,6 @@
     // ─────────────────────────────────────────────────────────────────────────
     // APP COMPONENTS
     // ─────────────────────────────────────────────────────────────────────────
-
     function Bar({ pct, color, over }) {
       return (
         <div style={{ height:"5px", background:"#1c1f27", borderRadius:"3px", overflow:"hidden", marginTop:"6px" }}>
@@ -193,7 +177,7 @@
     }
 
     function MonthNav({ viewMonth, setViewMonth }) {
-      const isCurrent = viewMonth === getMonthKey();
+      const isCurrent = viewMonth===getMonthKey();
       return (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"20px" }}>
           <button style={navBtn} onClick={()=>setViewMonth(prevKey(viewMonth))}>‹</button>
@@ -207,6 +191,7 @@
       );
     }
 
+    // ── HOME TAB ──────────────────────────────────────────────────────────────
     function HomeTab({ settings, allTxs, viewMonth, setViewMonth }) {
       const monthTxs = allTxs.filter(t=>t.month===viewMonth);
       const totalFixed = Object.values(settings.fixed).reduce((s,v)=>s+v,0);
@@ -214,10 +199,10 @@
       const spentByCat = Object.fromEntries(CATS.map(c=>[c.id,0]));
       monthTxs.forEach(t=>{ if(!t.reimbursable) spentByCat[t.category]=(spentByCat[t.category]||0)+t.amount; });
       const totalSpent = Object.values(spentByCat).reduce((s,v)=>s+v,0);
-      const remaining = freeMonthly - totalSpent;
-      const pct = freeMonthly>0 ? Math.round((remaining/freeMonthly)*100) : 0;
-      const remColor = remaining<0?"#ef4444":remaining<freeMonthly*0.15?"#f59e0b":"#4ade80";
-      const reimbs = monthTxs.filter(t=>t.reimbursable);
+      const remaining  = freeMonthly - totalSpent;
+      const pct        = freeMonthly>0?Math.round((remaining/freeMonthly)*100):0;
+      const remColor   = remaining<0?"#ef4444":remaining<freeMonthly*0.15?"#f59e0b":"#4ade80";
+      const reimbs     = monthTxs.filter(t=>t.reimbursable);
 
       return (
         <div style={{ padding:"20px 16px" }}>
@@ -288,15 +273,23 @@
       );
     }
 
-    function AddTab({ onAdd }) {
-      const [amount, setAmount]=useState(""), [cat,setCat]=useState(null), [desc,setDesc]=useState(""),
-            [reimb,setReimb]=useState(false), [date,setDate]=useState(todayISO()), [done,setDone]=useState(false);
-      const canAdd = parseFloat(amount)>0 && cat!==null;
+    // ── ADD TAB ───────────────────────────────────────────────────────────────
+    function AddTab({ onAdd, cards }) {
+      const [amount,setAmount]=useState(""), [cat,setCat]=useState(null), [cardId,setCardId]=useState(null),
+            [desc,setDesc]=useState(""), [reimb,setReimb]=useState(false), [date,setDate]=useState(todayISO()), [done,setDone]=useState(false);
+      const canAdd = parseFloat(amount)>0 && cat!==null && cardId!==null;
+
+      const selectedCard = cards.find(c=>c.id===cardId);
+      const billingMonth = selectedCard && date ? getBillingMonth(date, selectedCard.cutDay) : null;
 
       const submit = async () => {
         if(!canAdd) return;
-        await onAdd({ id:Date.now().toString(), date, month:date.slice(0,7), category:cat, amount:parseFloat(amount), desc:desc.trim(), reimbursable:cat==="salud"?reimb:false });
-        setAmount(""); setCat(null); setDesc(""); setReimb(false); setDate(todayISO());
+        await onAdd({
+          id:Date.now().toString(), date, month:billingMonth||date.slice(0,7),
+          category:cat, amount:parseFloat(amount), desc:desc.trim(),
+          reimbursable:cat==="salud"?reimb:false, cardId,
+        });
+        setAmount(""); setCat(null); setCardId(null); setDesc(""); setReimb(false); setDate(todayISO());
         setDone(true); setTimeout(()=>setDone(false),1800);
       };
 
@@ -311,6 +304,7 @@
         <div style={{ padding:"24px 16px" }}>
           <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>NUEVO GASTO</div>
 
+          {/* Amount */}
           <div style={{ ...card, marginBottom:"12px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>CANTIDAD</div>
             <div style={{ display:"flex", alignItems:"baseline", gap:"6px" }}>
@@ -320,35 +314,59 @@
             </div>
           </div>
 
+          {/* Category */}
           <div style={{ ...card, marginBottom:"12px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>CATEGORÍA</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"8px" }}>
               {CATS.map(c=>(
                 <button key={c.id} onClick={()=>{ setCat(c.id); if(c.id!=="salud") setReimb(false); }}
-                  style={{ padding:"14px 6px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"5px", border:cat===c.id?`2px solid ${c.color}`:"2px solid transparent", borderRadius:"10px", background:cat===c.id?`${c.color}18`:"#1c1f27", transition:"all 0.15s" }}>
-                  <span style={{ fontSize:"22px" }}>{c.icon}</span>
+                  style={{ padding:"12px 6px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"4px", border:cat===c.id?`2px solid ${c.color}`:"2px solid transparent", borderRadius:"10px", background:cat===c.id?`${c.color}18`:"#1c1f27", transition:"all 0.15s" }}>
+                  <span style={{ fontSize:"20px" }}>{c.icon}</span>
                   <span style={{ fontSize:"10px", color:cat===c.id?c.color:"#6b7280", fontFamily:"monospace" }}>{c.label}</span>
                 </button>
               ))}
             </div>
             {cat==="salud"&&(
-              <div style={{ marginTop:"14px", display:"flex", alignItems:"center", gap:"12px" }}>
+              <div style={{ marginTop:"12px", display:"flex", alignItems:"center", gap:"12px" }}>
                 <div onClick={()=>setReimb(!reimb)} style={{ width:"42px", height:"24px", borderRadius:"12px", background:reimb?"#3b82f6":"#1c1f27", position:"relative", cursor:"pointer", transition:"background 0.2s", border:"1px solid #252830", flexShrink:0 }}>
                   <div style={{ width:"18px", height:"18px", borderRadius:"50%", background:"#e8e4dc", position:"absolute", top:"3px", left:reimb?"21px":"3px", transition:"left 0.2s" }} />
                 </div>
-                <span style={{ fontSize:"12px", color:"#6b7280", lineHeight:"1.4" }}>Me lo reembolsan — no descuenta del presupuesto</span>
+                <span style={{ fontSize:"12px", color:"#6b7280", lineHeight:"1.4" }}>Me lo reembolsan</span>
               </div>
             )}
           </div>
 
+          {/* Card selector */}
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>TARJETA / MEDIO DE PAGO</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:"8px" }}>
+              {cards.map(c=>(
+                <button key={c.id} onClick={()=>setCardId(c.id)}
+                  style={{ padding:"8px 14px", border:cardId===c.id?"2px solid #4ade80":"2px solid transparent", borderRadius:"8px", background:cardId===c.id?"#052e16":"#1c1f27", color:cardId===c.id?"#4ade80":"#6b7280", fontSize:"13px", cursor:"pointer", fontFamily:"monospace", transition:"all 0.15s" }}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Billing month preview */}
+            {billingMonth && date && (
+              <div style={{ marginTop:"12px", padding:"10px 12px", background:"#0f1117", borderRadius:"8px", border:"1px solid #252830", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>SE CONTARÁ EN</span>
+                <span style={{ fontSize:"13px", color:"#4ade80", fontFamily:"monospace", fontWeight:"600" }}>{monthLabel(billingMonth)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Description */}
           <div style={{ ...card, marginBottom:"12px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>DESCRIPCIÓN (opcional)</div>
             <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="ej. cena con amigos, recibo de luz..."
               style={{ background:"transparent", border:"none", outline:"none", fontSize:"14px", color:"#9ca3af", width:"100%" }} />
           </div>
 
+          {/* Purchase date */}
           <div style={{ ...card, marginBottom:"22px" }}>
-            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>FECHA</div>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>FECHA DE COMPRA</div>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)}
               style={{ background:"transparent", border:"none", outline:"none", fontSize:"14px", color:"#9ca3af", fontFamily:"monospace" }} />
           </div>
@@ -361,7 +379,8 @@
       );
     }
 
-    function HistoryTab({ allTxs, onDelete, viewMonth, setViewMonth }) {
+    // ── HISTORY TAB ───────────────────────────────────────────────────────────
+    function HistoryTab({ allTxs, onDelete, viewMonth, setViewMonth, cards }) {
       const monthTxs = allTxs.filter(t=>t.month===viewMonth).sort((a,b)=>b.date.localeCompare(a.date));
       const isCurrent = viewMonth===getMonthKey();
       const grouped = {};
@@ -383,7 +402,8 @@
             <div key={date} style={{ marginBottom:"18px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"7px" }}>{dayLabel(date)}</div>
               {grouped[date].map(tx=>{
-                const cat=CATS.find(c=>c.id===tx.category)||CATS[4];
+                const cat  = CATS.find(c=>c.id===tx.category)||CATS[4];
+                const card2= cards.find(c=>c.id===tx.cardId);
                 return (
                   <div key={tx.id} style={{ ...card, display:"flex", alignItems:"center", gap:"12px", marginBottom:"7px", borderLeft:`3px solid ${tx.reimbursable?"#3b82f6":cat.color}30` }}>
                     <span style={{ fontSize:"20px" }}>{cat.icon}</span>
@@ -391,6 +411,7 @@
                       <div style={{ fontSize:"13px", color:tx.reimbursable?"#3b82f6":"#9ca3af", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tx.desc||cat.label}</div>
                       <div style={{ display:"flex", gap:"6px", alignItems:"center", marginTop:"2px" }}>
                         <span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace" }}>{cat.label}</span>
+                        {card2&&<span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace", background:"#1c1f27", padding:"1px 5px", borderRadius:"3px" }}>{card2.name}</span>}
                         {tx.reimbursable&&<span style={{ fontSize:"9px", color:"#3b82f6", fontFamily:"monospace", background:"#0d1a2d", padding:"1px 5px", borderRadius:"3px" }}>REEMBOLSABLE</span>}
                       </div>
                     </div>
@@ -405,33 +426,44 @@
       );
     }
 
+    // ── SETTINGS TAB ──────────────────────────────────────────────────────────
     function SettingsTab({ settings, onSave, onLogout }) {
-      const [local,setLocal] = useState({ salary:settings.salary, fixed:{...settings.fixed}, budgets:{...settings.budgets} });
-      const [saved,setSaved] = useState(false);
-      const [changingPw,setChangingPw] = useState(false);
+      const [local,setLocal]     = useState({ salary:settings.salary, fixed:{...settings.fixed}, budgets:{...settings.budgets}, cards:[...settings.cards] });
+      const [saved,setSaved]     = useState(false);
+      const [section,setSection] = useState("budget"); // budget | cards | password
       const [oldPw,setOldPw]=useState(""), [newPw,setNewPw]=useState(""), [newPw2,setNewPw2]=useState(""), [pwErr,setPwErr]=useState(""), [pwOk,setPwOk]=useState(false);
+      const [newCard,setNewCard] = useState({ name:"", cutDay:"", payDay:"" });
+      const [editCard,setEditCard]= useState(null); // id of card being edited
 
-      const handleSave = async () => {
+      const handleSave = () => {
         const clean = {
           salary:parseFloat(local.salary)||0,
           fixed:Object.fromEntries(Object.entries(local.fixed).map(([k,v])=>[k,parseFloat(v)||0])),
           budgets:Object.fromEntries(Object.entries(local.budgets).map(([k,v])=>[k,parseFloat(v)||0])),
+          cards:local.cards,
         };
         onSave(clean); setSaved(true); setTimeout(()=>setSaved(false),2000);
       };
 
       const handleChangePw = async () => {
         setPwErr("");
-        const oldHash = await sha256(oldPw);
-        const stored = LS.get("budget:pwHash");
-        if(oldHash!==stored) { setPwErr("Contraseña actual incorrecta."); return; }
-        if(newPw.length<6)   { setPwErr("Mínimo 6 caracteres."); return; }
-        if(newPw!==newPw2)   { setPwErr("Las contraseñas no coinciden."); return; }
-        const newHash = await sha256(newPw);
-        LS.set("budget:pwHash", newHash);
-        setOldPw(""); setNewPw(""); setNewPw2(""); setPwOk(true); setChangingPw(false);
-        setTimeout(()=>setPwOk(false),3000);
+        if(await sha256(oldPw)!==LS.get("budget:pwHash")) { setPwErr("Contraseña actual incorrecta."); return; }
+        if(newPw.length<6)  { setPwErr("Mínimo 6 caracteres."); return; }
+        if(newPw!==newPw2)  { setPwErr("Las contraseñas no coinciden."); return; }
+        LS.set("budget:pwHash", await sha256(newPw));
+        setOldPw(""); setNewPw(""); setNewPw2(""); setPwOk(true); setTimeout(()=>setPwOk(false),3000);
       };
+
+      const addCard = () => {
+        if(!newCard.name) return;
+        const c = { id:Date.now().toString(), name:newCard.name, cutDay:newCard.cutDay?parseInt(newCard.cutDay):null, payDay:newCard.payDay?parseInt(newCard.payDay):null };
+        setLocal(s=>({...s,cards:[...s.cards,c]}));
+        setNewCard({ name:"", cutDay:"", payDay:"" });
+      };
+
+      const removeCard = (id) => setLocal(s=>({...s,cards:s.cards.filter(c=>c.id!==id)}));
+
+      const updateCard = (id, field, val) => setLocal(s=>({...s,cards:s.cards.map(c=>c.id===id?{...c,[field]:field==="name"?val:(val?parseInt(val):null)}:c)}));
 
       const totalFixed = Object.values(local.fixed).reduce((s,v)=>s+(parseFloat(v)||0),0);
       const free = (parseFloat(local.salary)||0)-totalFixed;
@@ -443,69 +475,131 @@
         </div>
       );
 
+      const tabs = [{id:"budget",l:"Presupuesto"},{id:"cards",l:"Tarjetas"},{id:"password",l:"Contraseña"}];
+
       return (
         <div style={{ padding:"20px 16px" }}>
-          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>CONFIGURACIÓN</div>
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>CONFIGURACIÓN</div>
 
-          <div style={{ ...card, marginBottom:"12px" }}>
-            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>SALARIO MENSUAL</div>
-            <NumField label="Salario" value={local.salary} onChange={e=>setLocal(s=>({...s,salary:e.target.value}))} />
-          </div>
-
-          <div style={{ ...card, marginBottom:"12px" }}>
-            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>GASTOS FIJOS / MES</div>
-            {Object.entries(local.fixed).map(([k,v])=>(
-              <NumField key={k} label={k} value={v} onChange={e=>setLocal(s=>({...s,fixed:{...s.fixed,[k]:e.target.value}}))} />
+          {/* Sub-tabs */}
+          <div style={{ display:"flex", gap:"6px", marginBottom:"18px" }}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setSection(t.id)}
+                style={{ flex:1, padding:"8px 4px", border:"none", borderRadius:"8px", cursor:"pointer", fontSize:"11px", fontFamily:"monospace", background:section===t.id?"#e8e4dc":"#1c1f27", color:section===t.id?"#0f1117":"#6b7280", transition:"all 0.15s" }}>
+                {t.l.toUpperCase()}
+              </button>
             ))}
-            <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", textAlign:"right", marginTop:"8px", paddingTop:"8px", borderTop:"1px solid #252830" }}>
-              Libre tras fijos: <span style={{ color:"#fbbf24" }}>{fmt(free)}</span>
-            </div>
           </div>
 
-          <div style={{ ...card, marginBottom:"12px" }}>
-            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>PRESUPUESTO VARIABLE / MES</div>
-            {CATS.map(cat=>(
-              <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"10px" }}>
-                <span style={{ fontSize:"16px", flexShrink:0 }}>{cat.icon}</span>
-                <span style={{ fontSize:"12px", color:"#6b7280", width:"90px", flexShrink:0 }}>{cat.label}</span>
-                <input type="number" value={local.budgets[cat.id]} onChange={e=>setLocal(s=>({...s,budgets:{...s.budgets,[cat.id]:e.target.value}}))}
-                  style={{ ...inputSt, flex:1 }} />
+          {/* BUDGET section */}
+          {section==="budget"&&<>
+            <div style={{ ...card, marginBottom:"12px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>SALARIO MENSUAL</div>
+              <NumField label="Salario" value={local.salary} onChange={e=>setLocal(s=>({...s,salary:e.target.value}))} />
+            </div>
+            <div style={{ ...card, marginBottom:"12px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>GASTOS FIJOS / MES</div>
+              {Object.entries(local.fixed).map(([k,v])=>(
+                <NumField key={k} label={k} value={v} onChange={e=>setLocal(s=>({...s,fixed:{...s.fixed,[k]:e.target.value}}))} />
+              ))}
+              <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", textAlign:"right", marginTop:"8px", paddingTop:"8px", borderTop:"1px solid #252830" }}>
+                Libre tras fijos: <span style={{color:"#fbbf24"}}>{fmt(free)}</span>
               </div>
-            ))}
-          </div>
-
-          <button onClick={handleSave}
-            style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", transition:"all 0.2s", marginBottom:"12px" }}>
-            {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
-          </button>
-
-          {/* Change password */}
-          <div style={{ ...card, marginBottom:"12px" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }} onClick={()=>setChangingPw(!changingPw)}>
-              <span style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>CAMBIAR CONTRASEÑA</span>
-              <span style={{ color:"#4b5563", fontSize:"16px" }}>{changingPw?"−":"+"}</span>
             </div>
-            {changingPw&&(
-              <div style={{ marginTop:"14px" }}>
-                {[
-                  { label:"CONTRASEÑA ACTUAL", val:oldPw, set:setOldPw },
-                  { label:"CONTRASEÑA NUEVA",  val:newPw, set:setNewPw },
-                  { label:"CONFIRMAR NUEVA",   val:newPw2,set:setNewPw2 },
-                ].map(f=>(
-                  <div key={f.label} style={{ marginBottom:"10px" }}>
-                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"6px" }}>{f.label}</div>
-                    <input type="password" value={f.val} onChange={e=>f.set(e.target.value)} style={{ ...inputSt, fontFamily:"monospace" }} />
+            <div style={{ ...card, marginBottom:"20px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>PRESUPUESTO VARIABLE / MES</div>
+              {CATS.map(cat=>(
+                <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"10px" }}>
+                  <span style={{ fontSize:"16px", flexShrink:0 }}>{cat.icon}</span>
+                  <span style={{ fontSize:"12px", color:"#6b7280", width:"90px", flexShrink:0 }}>{cat.label}</span>
+                  <input type="number" value={local.budgets[cat.id]} onChange={e=>setLocal(s=>({...s,budgets:{...s.budgets,[cat.id]:e.target.value}}))} style={{ ...inputSt, flex:1 }} />
+                </div>
+              ))}
+            </div>
+            <button onClick={handleSave}
+              style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", marginBottom:"12px" }}>
+              {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
+            </button>
+          </>}
+
+          {/* CARDS section */}
+          {section==="cards"&&<>
+            <div style={{ ...card, marginBottom:"12px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"14px" }}>TUS TARJETAS</div>
+              {local.cards.map(c=>(
+                <div key={c.id} style={{ marginBottom:"12px", paddingBottom:"12px", borderBottom:"1px solid #252830" }}>
+                  {editCard===c.id?(
+                    <div>
+                      <input value={c.name} onChange={e=>updateCard(c.id,"name",e.target.value)} placeholder="Nombre" style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
+                      <div style={{ display:"flex", gap:"8px", marginBottom:"8px" }}>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE CORTE</div>
+                          <input type="number" value={c.cutDay||""} onChange={e=>updateCard(c.id,"cutDay",e.target.value)} placeholder="ej. 17" style={{ ...inputSt, fontSize:"13px" }} />
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE PAGO</div>
+                          <input type="number" value={c.payDay||""} onChange={e=>updateCard(c.id,"payDay",e.target.value)} placeholder="ej. 6" style={{ ...inputSt, fontSize:"13px" }} />
+                        </div>
+                      </div>
+                      <button onClick={()=>setEditCard(null)} style={{ width:"100%", padding:"10px", border:"none", borderRadius:"8px", background:"#4ade80", color:"#0f1117", fontSize:"13px", fontWeight:"700", cursor:"pointer" }}>LISTO</button>
+                    </div>
+                  ):(
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div>
+                        <div style={{ fontSize:"14px", color:"#e8e4dc" }}>{c.name}</div>
+                        <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", marginTop:"2px" }}>
+                          {c.cutDay?`Corte: ${c.cutDay} · Pago: ${c.payDay}`:"Efectivo / Débito"}
+                        </div>
+                      </div>
+                      <div style={{ display:"flex", gap:"8px" }}>
+                        <button onClick={()=>setEditCard(c.id)} style={{ background:"#1c1f27", border:"none", color:"#9ca3af", padding:"6px 12px", borderRadius:"6px", cursor:"pointer", fontSize:"12px" }}>Editar</button>
+                        <button onClick={()=>removeCard(c.id)} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:"18px", lineHeight:"1" }}>×</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Add new card */}
+              <div style={{ marginTop:"4px" }}>
+                <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"10px" }}>AGREGAR TARJETA</div>
+                <input value={newCard.name} onChange={e=>setNewCard(s=>({...s,name:e.target.value}))} placeholder="Nombre de la tarjeta" style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
+                <div style={{ display:"flex", gap:"8px", marginBottom:"10px" }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE CORTE</div>
+                    <input type="number" value={newCard.cutDay} onChange={e=>setNewCard(s=>({...s,cutDay:e.target.value}))} placeholder="ej. 17" style={{ ...inputSt, fontSize:"13px" }} />
                   </div>
-                ))}
-                {pwErr&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"10px", fontFamily:"monospace" }}>{pwErr}</div>}
-                <button onClick={handleChangePw}
-                  style={{ width:"100%", padding:"12px", border:"none", borderRadius:"10px", cursor:"pointer", background:"#3b82f6", color:"#fff", fontSize:"14px", fontWeight:"700" }}>
-                  ACTUALIZAR CONTRASEÑA
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE PAGO</div>
+                    <input type="number" value={newCard.payDay} onChange={e=>setNewCard(s=>({...s,payDay:e.target.value}))} placeholder="ej. 6" style={{ ...inputSt, fontSize:"13px" }} />
+                  </div>
+                </div>
+                <button onClick={addCard} disabled={!newCard.name}
+                  style={{ width:"100%", padding:"12px", border:"none", borderRadius:"8px", cursor:newCard.name?"pointer":"default", background:newCard.name?"#1c1f27":"#161920", color:newCard.name?"#9ca3af":"#374151", fontSize:"13px", fontFamily:"monospace" }}>
+                  + AGREGAR
                 </button>
               </div>
-            )}
-            {pwOk&&!changingPw&&<div style={{ fontSize:"12px", color:"#4ade80", marginTop:"8px", fontFamily:"monospace" }}>✓ Contraseña actualizada</div>}
-          </div>
+            </div>
+            <button onClick={handleSave}
+              style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", marginBottom:"12px" }}>
+              {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
+            </button>
+          </>}
+
+          {/* PASSWORD section */}
+          {section==="password"&&<>
+            <div style={{ ...card, marginBottom:"12px" }}>
+              {[{l:"CONTRASEÑA ACTUAL",v:oldPw,s:setOldPw},{l:"CONTRASEÑA NUEVA",v:newPw,s:setNewPw},{l:"CONFIRMAR NUEVA",v:newPw2,s:setNewPw2}].map(f=>(
+                <div key={f.l} style={{ marginBottom:"12px" }}>
+                  <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>{f.l}</div>
+                  <input type="password" value={f.v} onChange={e=>f.s(e.target.value)} style={{ ...inputSt, fontFamily:"monospace" }} />
+                </div>
+              ))}
+              {pwErr&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"10px", fontFamily:"monospace" }}>{pwErr}</div>}
+              {pwOk&&<div style={{ fontSize:"12px", color:"#4ade80", marginBottom:"10px", fontFamily:"monospace" }}>✓ Contraseña actualizada</div>}
+              <button onClick={handleChangePw} style={{ width:"100%", padding:"12px", border:"none", borderRadius:"10px", cursor:"pointer", background:"#3b82f6", color:"#fff", fontSize:"14px", fontWeight:"700" }}>ACTUALIZAR</button>
+            </div>
+          </>}
 
           <button onClick={onLogout}
             style={{ width:"100%", padding:"14px", border:"1px solid #252830", borderRadius:"12px", cursor:"pointer", background:"transparent", color:"#6b7280", fontSize:"14px", letterSpacing:"1px", fontFamily:"monospace" }}>
@@ -515,15 +609,11 @@
       );
     }
 
+    // ── BOTTOM NAV ────────────────────────────────────────────────────────────
     function BottomNav({ tab, setTab }) {
-      const items = [
-        { id:"home",    icon:"⊙", label:"Inicio" },
-        { id:"add",     icon:"+", label:"Agregar" },
-        { id:"history", icon:"≡", label:"Historial" },
-        { id:"settings",icon:"⚙", label:"Config" },
-      ];
+      const items=[{id:"home",icon:"⊙",label:"Inicio"},{id:"add",icon:"+",label:"Agregar"},{id:"history",icon:"≡",label:"Historial"},{id:"settings",icon:"⚙",label:"Config"}];
       return (
-        <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#0f1117", borderTop:"1px solid #252830", display:"flex", padding:"10px 0 env(safe-area-inset-bottom, 14px)", zIndex:100 }}>
+        <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#0f1117", borderTop:"1px solid #252830", display:"flex", padding:"10px 0 env(safe-area-inset-bottom,14px)", zIndex:100 }}>
           {items.map(item=>(
             <button key={item.id} onClick={()=>setTab(item.id)}
               style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"3px", color:tab===item.id?"#4ade80":"#374151", transition:"color 0.15s" }}>
@@ -535,58 +625,36 @@
       );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // MAIN APP
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── MAIN APP ──────────────────────────────────────────────────────────────
     function App() {
-      const hasHash = () => !!LS.get("budget:pwHash");
-      const isAuthed = () => sessionStorage.getItem("budget:authed") === "1";
+      const [screen,setScreen]       = useState(()=>{ if(!LS.get("budget:pwHash")) return "setup"; if(sessionStorage.getItem("budget:authed")!=="1") return "login"; return "app"; });
+      const [tab,setTab]             = useState("home");
+      const [settings,setSettings]  = useState(()=>{ const s=LS.get("budget:settings"); return s?{...DEFAULTS,...s,cards:s.cards||DEFAULTS.cards}:DEFAULTS; });
+      const [txs,setTxs]             = useState(()=>LS.get("budget:transactions")||[]);
+      const [viewMonth,setViewMonth] = useState(getMonthKey());
 
-      const [screen, setScreen] = useState(() => {
-        if (!hasHash()) return "setup";
-        if (!isAuthed()) return "login";
-        return "app";
-      });
+      const saveSettings = (s) => { setSettings(s); LS.set("budget:settings",s); };
+      const addTransaction = (tx) => { const next=[tx,...txs]; setTxs(next); LS.set("budget:transactions",next); setViewMonth(tx.month); setTab("home"); };
+      const deleteTransaction = (id) => { const next=txs.filter(t=>t.id!==id); setTxs(next); LS.set("budget:transactions",next); };
+      const logout = () => { sessionStorage.removeItem("budget:authed"); setScreen("login"); };
 
-      const [tab, setTab]             = useState("home");
-      const [settings, setSettings]   = useState(() => LS.get("budget:settings") || DEFAULTS);
-      const [txs, setTxs]             = useState(() => LS.get("budget:transactions") || []);
-      const [viewMonth, setViewMonth] = useState(getMonthKey());
+      if(screen==="setup") return <SetupScreen onDone={()=>setScreen("app")} />;
+      if(screen==="login") return <LoginScreen onLogin={()=>setScreen("app")} />;
 
-      const saveSettings = (s) => { setSettings(s); LS.set("budget:settings", s); };
-
-      const addTransaction = (tx) => {
-        const next = [tx, ...txs];
-        setTxs(next); LS.set("budget:transactions", next);
-        setViewMonth(tx.month); setTab("home");
-      };
-
-      const deleteTransaction = (id) => {
-        const next = txs.filter(t=>t.id!==id);
-        setTxs(next); LS.set("budget:transactions", next);
-      };
-
-      const logout = () => {
-        sessionStorage.removeItem("budget:authed");
-        setScreen("login");
-      };
-
-      if (screen === "setup") return <SetupScreen onDone={()=>setScreen("app")} />;
-      if (screen === "login") return <LoginScreen onLogin={()=>setScreen("app")} />;
+      const cards = settings.cards || DEFAULTS.cards;
 
       return (
         <div style={{ background:"#0f1117", minHeight:"100vh", maxWidth:"430px", margin:"0 auto", color:"#e8e4dc", paddingBottom:"80px" }}>
           {tab==="home"    &&<HomeTab     settings={settings} allTxs={txs} viewMonth={viewMonth} setViewMonth={setViewMonth} />}
-          {tab==="add"     &&<AddTab      onAdd={addTransaction} />}
-          {tab==="history" &&<HistoryTab  allTxs={txs} onDelete={deleteTransaction} viewMonth={viewMonth} setViewMonth={setViewMonth} />}
+          {tab==="add"     &&<AddTab      onAdd={addTransaction} cards={cards} />}
+          {tab==="history" &&<HistoryTab  allTxs={txs} onDelete={deleteTransaction} viewMonth={viewMonth} setViewMonth={setViewMonth} cards={cards} />}
           {tab==="settings"&&<SettingsTab settings={settings} onSave={saveSettings} onLogout={logout} />}
           <BottomNav tab={tab} setTab={setTab} />
         </div>
       );
     }
 
-    const root = ReactDOM.createRoot(document.getElementById("root"));
-    root.render(<App />);
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 </body>
 </html>
