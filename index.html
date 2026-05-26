@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Mi Presupuesto</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1117; font-family: system-ui, -apple-system, sans-serif; }
+    input:focus { outline: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #252830; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CONFIGURATION
+    // SETUP_CODE: used only the very first time to create your password.
+    // It is NOT your password — change it if you want after first login.
+    // ─────────────────────────────────────────────────────────────────────────
+    const SETUP_CODE = "U3J1KaeE";
+
+    // ─── Crypto ───────────────────────────────────────────────────────────────
+    async function sha256(str) {
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+    }
+
+    // ─── Storage (localStorage) ───────────────────────────────────────────────
+    const LS = {
+      get(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } },
+      set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+      remove(k) { try { localStorage.removeItem(k); } catch {} },
+    };
+
+    // ─── Utilities ────────────────────────────────────────────────────────────
+    const fmt = (n) =>
+      new Intl.NumberFormat("es-MX", { style:"currency", currency:"MXN", maximumFractionDigits:0 }).format(Math.abs(n));
+    const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    const todayISO = () => new Date().toISOString().split("T")[0];
+    const getMonthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const monthLabel = (k) => { const [y,m]=k.split("-"); return `${MONTHS[+m-1]} ${y}`; };
+    const dayLabel = (iso) => { const p=iso.split("-"); return `${+p[2]} ${MONTHS[+p[1]-1].slice(0,3)}`; };
+    const prevKey = (k) => { const [y,m]=k.split("-").map(Number); const d=new Date(y,m-2,1); return getMonthKey(d); };
+    const nextKey = (k) => { const [y,m]=k.split("-").map(Number); const d=new Date(y,m,1); return getMonthKey(d); };
+
+    // ─── Defaults ─────────────────────────────────────────────────────────────
+    const DEFAULTS = {
+      salary: 57000,
+      fixed: { Amex: 13588, Invex: 5760, "Banbajío": 5563, Renta: 13300 },
+      budgets: { despensa: 6000, entretenimiento: 3000, servicios: 1000, salud: 0, otros: 0 },
+    };
+
+    const CATS = [
+      { id:"despensa",        label:"Despensa",       icon:"🛒", color:"#22c55e" },
+      { id:"entretenimiento", label:"Entretenimiento", icon:"🎭", color:"#a855f7" },
+      { id:"servicios",       label:"Servicios",       icon:"💡", color:"#f59e0b" },
+      { id:"salud",           label:"Salud",           icon:"🏥", color:"#3b82f6" },
+      { id:"otros",           label:"Otros",           icon:"📦", color:"#9ca3af" },
+    ];
+
+    // ─── Shared Styles ────────────────────────────────────────────────────────
+    const card = { background:"#161920", border:"1px solid #252830", borderRadius:"14px", padding:"16px" };
+    const navBtn = { background:"#161920", border:"1px solid #252830", borderRadius:"10px", color:"#9ca3af", fontSize:"20px", width:"38px", height:"38px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
+    const inputSt = { background:"#1c1f27", border:"1px solid #252830", borderRadius:"8px", padding:"10px 14px", color:"#e8e4dc", fontSize:"15px", outline:"none", width:"100%" };
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // AUTH SCREENS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function AuthShell({ children }) {
+      return (
+        <div style={{ background:"#0f1117", minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px" }}>
+          <div style={{ marginBottom:"32px", textAlign:"center" }}>
+            <div style={{ fontSize:"32px", marginBottom:"8px" }}>💰</div>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"3px" }}>MI PRESUPUESTO</div>
+          </div>
+          <div style={{ ...card, width:"100%", maxWidth:"360px" }}>
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    // First-time setup screen
+    function SetupScreen({ onDone }) {
+      const [code, setCode]       = useState("");
+      const [pw, setPw]           = useState("");
+      const [pw2, setPw2]         = useState("");
+      const [error, setError]     = useState("");
+      const [loading, setLoading] = useState(false);
+
+      const handleSetup = async () => {
+        setError("");
+        if (code !== SETUP_CODE)      { setError("Código de configuración incorrecto."); return; }
+        if (pw.length < 6)            { setError("La contraseña debe tener al menos 6 caracteres."); return; }
+        if (pw !== pw2)               { setError("Las contraseñas no coinciden."); return; }
+        setLoading(true);
+        const hash = await sha256(pw);
+        LS.set("budget:pwHash", hash);
+        sessionStorage.setItem("budget:authed", "1");
+        setLoading(false);
+        onDone();
+      };
+
+      return (
+        <AuthShell>
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>CONFIGURACIÓN INICIAL</div>
+          <p style={{ fontSize:"13px", color:"#6b7280", marginBottom:"20px", lineHeight:"1.6" }}>
+            Primera vez que abres la app. Ingresa el código de configuración y crea tu contraseña.
+          </p>
+          {[
+            { label:"CÓDIGO DE CONFIGURACIÓN", val:code, set:setCode, type:"text", ph:"········" },
+            { label:"CONTRASEÑA NUEVA",         val:pw,   set:setPw,   type:"password", ph:"mínimo 6 caracteres" },
+            { label:"CONFIRMAR CONTRASEÑA",     val:pw2,  set:setPw2,  type:"password", ph:"repite tu contraseña" },
+          ].map(f => (
+            <div key={f.label} style={{ marginBottom:"14px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"6px" }}>{f.label}</div>
+              <input type={f.type} value={f.val} onChange={e=>f.set(e.target.value)} placeholder={f.ph}
+                onKeyDown={e=>{ if(e.key==="Enter") handleSetup(); }}
+                style={{ ...inputSt, fontFamily: f.type==="password"?"monospace":"inherit" }} />
+            </div>
+          ))}
+          {error && <div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"14px", fontFamily:"monospace" }}>{error}</div>}
+          <button onClick={handleSetup} disabled={loading}
+            style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer", letterSpacing:"1px" }}>
+            {loading ? "CREANDO..." : "CREAR CONTRASEÑA"}
+          </button>
+        </AuthShell>
+      );
+    }
+
+    // Login screen
+    function LoginScreen({ onLogin }) {
+      const [pw, setPw]           = useState("");
+      const [error, setError]     = useState("");
+      const [loading, setLoading] = useState(false);
+
+      const handleLogin = async () => {
+        setError("");
+        setLoading(true);
+        const hash = await sha256(pw);
+        const stored = LS.get("budget:pwHash");
+        if (hash === stored) {
+          sessionStorage.setItem("budget:authed", "1");
+          onLogin();
+        } else {
+          setError("Contraseña incorrecta.");
+        }
+        setLoading(false);
+      };
+
+      return (
+        <AuthShell>
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>INICIAR SESIÓN</div>
+          <div style={{ marginBottom:"6px", fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>CONTRASEÑA</div>
+          <input type="password" value={pw} onChange={e=>{ setPw(e.target.value); setError(""); }}
+            placeholder="tu contraseña"
+            onKeyDown={e=>{ if(e.key==="Enter") handleLogin(); }}
+            autoFocus
+            style={{ ...inputSt, fontFamily:"monospace", marginBottom:"14px" }} />
+          {error && <div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"14px", fontFamily:"monospace" }}>{error}</div>}
+          <button onClick={handleLogin} disabled={loading}
+            style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer", letterSpacing:"1px" }}>
+            {loading ? "..." : "ENTRAR"}
+          </button>
+        </AuthShell>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // APP COMPONENTS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function Bar({ pct, color, over }) {
+      return (
+        <div style={{ height:"5px", background:"#1c1f27", borderRadius:"3px", overflow:"hidden", marginTop:"6px" }}>
+          <div style={{ width:`${Math.min(Math.max(pct,0),100)}%`, height:"100%", background:over?"#ef4444":color, borderRadius:"3px", transition:"width 0.5s" }} />
+        </div>
+      );
+    }
+
+    function MonthNav({ viewMonth, setViewMonth }) {
+      const isCurrent = viewMonth === getMonthKey();
+      return (
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"20px" }}>
+          <button style={navBtn} onClick={()=>setViewMonth(prevKey(viewMonth))}>‹</button>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px" }}>PRESUPUESTO</div>
+            <div style={{ fontSize:"16px", color:"#e8e4dc", fontWeight:"500" }}>{monthLabel(viewMonth)}</div>
+          </div>
+          <button style={{ ...navBtn, opacity:isCurrent?0.2:1 }} disabled={isCurrent}
+            onClick={()=>{ if(!isCurrent) setViewMonth(nextKey(viewMonth)); }}>›</button>
+        </div>
+      );
+    }
+
+    function HomeTab({ settings, allTxs, viewMonth, setViewMonth }) {
+      const monthTxs = allTxs.filter(t=>t.month===viewMonth);
+      const totalFixed = Object.values(settings.fixed).reduce((s,v)=>s+v,0);
+      const freeMonthly = settings.salary - totalFixed;
+      const spentByCat = Object.fromEntries(CATS.map(c=>[c.id,0]));
+      monthTxs.forEach(t=>{ if(!t.reimbursable) spentByCat[t.category]=(spentByCat[t.category]||0)+t.amount; });
+      const totalSpent = Object.values(spentByCat).reduce((s,v)=>s+v,0);
+      const remaining = freeMonthly - totalSpent;
+      const pct = freeMonthly>0 ? Math.round((remaining/freeMonthly)*100) : 0;
+      const remColor = remaining<0?"#ef4444":remaining<freeMonthly*0.15?"#f59e0b":"#4ade80";
+      const reimbs = monthTxs.filter(t=>t.reimbursable);
+
+      return (
+        <div style={{ padding:"20px 16px" }}>
+          <MonthNav viewMonth={viewMonth} setViewMonth={setViewMonth} />
+
+          <div style={{ ...card, textAlign:"center", marginBottom:"14px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"10px" }}>DISPONIBLE ESTE MES</div>
+            <div style={{ fontSize:"44px", color:remColor, fontWeight:"300", letterSpacing:"-1px", lineHeight:"1" }}>
+              {remaining<0?"-":""}{fmt(remaining)}
+            </div>
+            <div style={{ fontSize:"12px", color:"#4b5563", marginTop:"6px" }}>
+              de {fmt(freeMonthly)} libre · <span style={{color:remColor}}>{pct}%</span> restante
+            </div>
+            <Bar pct={pct} color={remColor} over={remaining<0} />
+          </div>
+
+          <div style={{ ...card, marginBottom:"14px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px" }}>
+              <span style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>FIJOS DEDUCIDOS</span>
+              <span style={{ fontFamily:"monospace", fontSize:"12px", color:"#f87171" }}>-{fmt(totalFixed)}</span>
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:"6px" }}>
+              {Object.entries(settings.fixed).map(([k,v])=>(
+                <span key={k} style={{ fontSize:"10px", background:"#1c1f27", color:"#6b7280", padding:"2px 8px", borderRadius:"4px", fontFamily:"monospace" }}>{k} {fmt(v)}</span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ ...card, marginBottom:reimbs.length>0?"14px":"0" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"16px" }}>POR CATEGORÍA</div>
+            {CATS.map(cat=>{
+              const spent=spentByCat[cat.id]||0, budget=settings.budgets[cat.id]||0;
+              if(spent===0&&budget===0) return null;
+              const over=budget>0&&spent>budget;
+              return (
+                <div key={cat.id} style={{ marginBottom:"14px" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div style={{ display:"flex", gap:"7px", alignItems:"center" }}>
+                      <span style={{ fontSize:"15px" }}>{cat.icon}</span>
+                      <span style={{ fontSize:"13px", color:"#9ca3af" }}>{cat.label}</span>
+                      {over&&<span style={{ fontSize:"9px", color:"#ef4444", fontFamily:"monospace", background:"#2d0a0a", padding:"1px 5px", borderRadius:"3px" }}>EXCEDIDO</span>}
+                    </div>
+                    <div>
+                      <span style={{ fontFamily:"monospace", fontSize:"13px", color:over?"#ef4444":"#e8e4dc" }}>{fmt(spent)}</span>
+                      {budget>0&&<span style={{ fontFamily:"monospace", fontSize:"11px", color:"#4b5563" }}> / {fmt(budget)}</span>}
+                    </div>
+                  </div>
+                  {budget>0&&<Bar pct={(spent/budget)*100} color={cat.color} over={over} />}
+                </div>
+              );
+            })}
+            {totalSpent===0&&<div style={{ textAlign:"center", color:"#374151", fontSize:"13px", padding:"8px 0" }}>Sin gastos registrados aún</div>}
+          </div>
+
+          {reimbs.length>0&&(
+            <div style={{ ...card, background:"#0d1a2d", border:"1px solid #1d3557" }}>
+              <div style={{ fontSize:"10px", color:"#3b82f6", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"10px" }}>🏥 PENDIENTES DE REEMBOLSO</div>
+              {reimbs.map(t=>(
+                <div key={t.id} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", fontSize:"13px" }}>
+                  <span style={{ color:"#6b7280" }}>{t.desc||"Salud"}</span>
+                  <span style={{ fontFamily:"monospace", color:"#3b82f6" }}>{fmt(t.amount)}</span>
+                </div>
+              ))}
+              <div style={{ fontSize:"10px", color:"#1d3557", marginTop:"8px", fontFamily:"monospace" }}>No cuentan contra tu presupuesto</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AddTab({ onAdd }) {
+      const [amount, setAmount]=useState(""), [cat,setCat]=useState(null), [desc,setDesc]=useState(""),
+            [reimb,setReimb]=useState(false), [date,setDate]=useState(todayISO()), [done,setDone]=useState(false);
+      const canAdd = parseFloat(amount)>0 && cat!==null;
+
+      const submit = async () => {
+        if(!canAdd) return;
+        await onAdd({ id:Date.now().toString(), date, month:date.slice(0,7), category:cat, amount:parseFloat(amount), desc:desc.trim(), reimbursable:cat==="salud"?reimb:false });
+        setAmount(""); setCat(null); setDesc(""); setReimb(false); setDate(todayISO());
+        setDone(true); setTimeout(()=>setDone(false),1800);
+      };
+
+      if(done) return (
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh" }}>
+          <div style={{ fontSize:"56px", marginBottom:"12px" }}>✓</div>
+          <div style={{ fontSize:"16px", color:"#4ade80", fontFamily:"monospace", letterSpacing:"2px" }}>REGISTRADO</div>
+        </div>
+      );
+
+      return (
+        <div style={{ padding:"24px 16px" }}>
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>NUEVO GASTO</div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>CANTIDAD</div>
+            <div style={{ display:"flex", alignItems:"baseline", gap:"6px" }}>
+              <span style={{ fontSize:"24px", color:"#4b5563" }}>$</span>
+              <input type="number" inputMode="decimal" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"
+                style={{ background:"transparent", border:"none", outline:"none", fontSize:"40px", color:"#e8e4dc", fontFamily:"monospace", letterSpacing:"-1px", width:"100%" }} />
+            </div>
+          </div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>CATEGORÍA</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"8px" }}>
+              {CATS.map(c=>(
+                <button key={c.id} onClick={()=>{ setCat(c.id); if(c.id!=="salud") setReimb(false); }}
+                  style={{ padding:"14px 6px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"5px", border:cat===c.id?`2px solid ${c.color}`:"2px solid transparent", borderRadius:"10px", background:cat===c.id?`${c.color}18`:"#1c1f27", transition:"all 0.15s" }}>
+                  <span style={{ fontSize:"22px" }}>{c.icon}</span>
+                  <span style={{ fontSize:"10px", color:cat===c.id?c.color:"#6b7280", fontFamily:"monospace" }}>{c.label}</span>
+                </button>
+              ))}
+            </div>
+            {cat==="salud"&&(
+              <div style={{ marginTop:"14px", display:"flex", alignItems:"center", gap:"12px" }}>
+                <div onClick={()=>setReimb(!reimb)} style={{ width:"42px", height:"24px", borderRadius:"12px", background:reimb?"#3b82f6":"#1c1f27", position:"relative", cursor:"pointer", transition:"background 0.2s", border:"1px solid #252830", flexShrink:0 }}>
+                  <div style={{ width:"18px", height:"18px", borderRadius:"50%", background:"#e8e4dc", position:"absolute", top:"3px", left:reimb?"21px":"3px", transition:"left 0.2s" }} />
+                </div>
+                <span style={{ fontSize:"12px", color:"#6b7280", lineHeight:"1.4" }}>Me lo reembolsan — no descuenta del presupuesto</span>
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>DESCRIPCIÓN (opcional)</div>
+            <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="ej. cena con amigos, recibo de luz..."
+              style={{ background:"transparent", border:"none", outline:"none", fontSize:"14px", color:"#9ca3af", width:"100%" }} />
+          </div>
+
+          <div style={{ ...card, marginBottom:"22px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>FECHA</div>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+              style={{ background:"transparent", border:"none", outline:"none", fontSize:"14px", color:"#9ca3af", fontFamily:"monospace" }} />
+          </div>
+
+          <button onClick={submit} disabled={!canAdd}
+            style={{ width:"100%", padding:"17px", border:"none", borderRadius:"12px", cursor:canAdd?"pointer":"default", background:canAdd?"#4ade80":"#1c1f27", color:canAdd?"#0f1117":"#374151", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", transition:"all 0.2s" }}>
+            REGISTRAR
+          </button>
+        </div>
+      );
+    }
+
+    function HistoryTab({ allTxs, onDelete, viewMonth, setViewMonth }) {
+      const monthTxs = allTxs.filter(t=>t.month===viewMonth).sort((a,b)=>b.date.localeCompare(a.date));
+      const isCurrent = viewMonth===getMonthKey();
+      const grouped = {};
+      monthTxs.forEach(t=>{ if(!grouped[t.date]) grouped[t.date]=[]; grouped[t.date].push(t); });
+      const dates = Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+      const total = monthTxs.filter(t=>!t.reimbursable).reduce((s,t)=>s+t.amount,0);
+
+      return (
+        <div style={{ padding:"20px 16px" }}>
+          <MonthNav viewMonth={viewMonth} setViewMonth={setViewMonth} />
+          {monthTxs.length>0&&(
+            <div style={{ ...card, display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"16px" }}>
+              <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>{monthTxs.length} MOVIMIENTOS</span>
+              <span style={{ fontFamily:"monospace", fontSize:"14px", color:"#f87171" }}>-{fmt(total)}</span>
+            </div>
+          )}
+          {dates.length===0&&<div style={{ textAlign:"center", padding:"50px 0", color:"#374151", fontSize:"14px" }}>Sin registros este mes</div>}
+          {dates.map(date=>(
+            <div key={date} style={{ marginBottom:"18px" }}>
+              <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"7px" }}>{dayLabel(date)}</div>
+              {grouped[date].map(tx=>{
+                const cat=CATS.find(c=>c.id===tx.category)||CATS[4];
+                return (
+                  <div key={tx.id} style={{ ...card, display:"flex", alignItems:"center", gap:"12px", marginBottom:"7px", borderLeft:`3px solid ${tx.reimbursable?"#3b82f6":cat.color}30` }}>
+                    <span style={{ fontSize:"20px" }}>{cat.icon}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:"13px", color:tx.reimbursable?"#3b82f6":"#9ca3af", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tx.desc||cat.label}</div>
+                      <div style={{ display:"flex", gap:"6px", alignItems:"center", marginTop:"2px" }}>
+                        <span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace" }}>{cat.label}</span>
+                        {tx.reimbursable&&<span style={{ fontSize:"9px", color:"#3b82f6", fontFamily:"monospace", background:"#0d1a2d", padding:"1px 5px", borderRadius:"3px" }}>REEMBOLSABLE</span>}
+                      </div>
+                    </div>
+                    <span style={{ fontFamily:"monospace", fontSize:"14px", color:tx.reimbursable?"#3b82f6":"#e8e4dc", flexShrink:0 }}>{fmt(tx.amount)}</span>
+                    <button onClick={()=>onDelete(tx.id)} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:"20px", padding:"4px", flexShrink:0, lineHeight:"1" }}>×</button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function SettingsTab({ settings, onSave, onLogout }) {
+      const [local,setLocal] = useState({ salary:settings.salary, fixed:{...settings.fixed}, budgets:{...settings.budgets} });
+      const [saved,setSaved] = useState(false);
+      const [changingPw,setChangingPw] = useState(false);
+      const [oldPw,setOldPw]=useState(""), [newPw,setNewPw]=useState(""), [newPw2,setNewPw2]=useState(""), [pwErr,setPwErr]=useState(""), [pwOk,setPwOk]=useState(false);
+
+      const handleSave = async () => {
+        const clean = {
+          salary:parseFloat(local.salary)||0,
+          fixed:Object.fromEntries(Object.entries(local.fixed).map(([k,v])=>[k,parseFloat(v)||0])),
+          budgets:Object.fromEntries(Object.entries(local.budgets).map(([k,v])=>[k,parseFloat(v)||0])),
+        };
+        onSave(clean); setSaved(true); setTimeout(()=>setSaved(false),2000);
+      };
+
+      const handleChangePw = async () => {
+        setPwErr("");
+        const oldHash = await sha256(oldPw);
+        const stored = LS.get("budget:pwHash");
+        if(oldHash!==stored) { setPwErr("Contraseña actual incorrecta."); return; }
+        if(newPw.length<6)   { setPwErr("Mínimo 6 caracteres."); return; }
+        if(newPw!==newPw2)   { setPwErr("Las contraseñas no coinciden."); return; }
+        const newHash = await sha256(newPw);
+        LS.set("budget:pwHash", newHash);
+        setOldPw(""); setNewPw(""); setNewPw2(""); setPwOk(true); setChangingPw(false);
+        setTimeout(()=>setPwOk(false),3000);
+      };
+
+      const totalFixed = Object.values(local.fixed).reduce((s,v)=>s+(parseFloat(v)||0),0);
+      const free = (parseFloat(local.salary)||0)-totalFixed;
+
+      const NumField = ({label,value,onChange}) => (
+        <div style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"10px" }}>
+          <span style={{ fontSize:"12px", color:"#6b7280", width:"100px", flexShrink:0 }}>{label}</span>
+          <input type="number" value={value} onChange={onChange} style={{ ...inputSt, flex:1 }} />
+        </div>
+      );
+
+      return (
+        <div style={{ padding:"20px 16px" }}>
+          <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"20px" }}>CONFIGURACIÓN</div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>SALARIO MENSUAL</div>
+            <NumField label="Salario" value={local.salary} onChange={e=>setLocal(s=>({...s,salary:e.target.value}))} />
+          </div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>GASTOS FIJOS / MES</div>
+            {Object.entries(local.fixed).map(([k,v])=>(
+              <NumField key={k} label={k} value={v} onChange={e=>setLocal(s=>({...s,fixed:{...s.fixed,[k]:e.target.value}}))} />
+            ))}
+            <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", textAlign:"right", marginTop:"8px", paddingTop:"8px", borderTop:"1px solid #252830" }}>
+              Libre tras fijos: <span style={{ color:"#fbbf24" }}>{fmt(free)}</span>
+            </div>
+          </div>
+
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>PRESUPUESTO VARIABLE / MES</div>
+            {CATS.map(cat=>(
+              <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"10px" }}>
+                <span style={{ fontSize:"16px", flexShrink:0 }}>{cat.icon}</span>
+                <span style={{ fontSize:"12px", color:"#6b7280", width:"90px", flexShrink:0 }}>{cat.label}</span>
+                <input type="number" value={local.budgets[cat.id]} onChange={e=>setLocal(s=>({...s,budgets:{...s.budgets,[cat.id]:e.target.value}}))}
+                  style={{ ...inputSt, flex:1 }} />
+              </div>
+            ))}
+          </div>
+
+          <button onClick={handleSave}
+            style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", transition:"all 0.2s", marginBottom:"12px" }}>
+            {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
+          </button>
+
+          {/* Change password */}
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }} onClick={()=>setChangingPw(!changingPw)}>
+              <span style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>CAMBIAR CONTRASEÑA</span>
+              <span style={{ color:"#4b5563", fontSize:"16px" }}>{changingPw?"−":"+"}</span>
+            </div>
+            {changingPw&&(
+              <div style={{ marginTop:"14px" }}>
+                {[
+                  { label:"CONTRASEÑA ACTUAL", val:oldPw, set:setOldPw },
+                  { label:"CONTRASEÑA NUEVA",  val:newPw, set:setNewPw },
+                  { label:"CONFIRMAR NUEVA",   val:newPw2,set:setNewPw2 },
+                ].map(f=>(
+                  <div key={f.label} style={{ marginBottom:"10px" }}>
+                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"6px" }}>{f.label}</div>
+                    <input type="password" value={f.val} onChange={e=>f.set(e.target.value)} style={{ ...inputSt, fontFamily:"monospace" }} />
+                  </div>
+                ))}
+                {pwErr&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"10px", fontFamily:"monospace" }}>{pwErr}</div>}
+                <button onClick={handleChangePw}
+                  style={{ width:"100%", padding:"12px", border:"none", borderRadius:"10px", cursor:"pointer", background:"#3b82f6", color:"#fff", fontSize:"14px", fontWeight:"700" }}>
+                  ACTUALIZAR CONTRASEÑA
+                </button>
+              </div>
+            )}
+            {pwOk&&!changingPw&&<div style={{ fontSize:"12px", color:"#4ade80", marginTop:"8px", fontFamily:"monospace" }}>✓ Contraseña actualizada</div>}
+          </div>
+
+          <button onClick={onLogout}
+            style={{ width:"100%", padding:"14px", border:"1px solid #252830", borderRadius:"12px", cursor:"pointer", background:"transparent", color:"#6b7280", fontSize:"14px", letterSpacing:"1px", fontFamily:"monospace" }}>
+            CERRAR SESIÓN
+          </button>
+        </div>
+      );
+    }
+
+    function BottomNav({ tab, setTab }) {
+      const items = [
+        { id:"home",    icon:"⊙", label:"Inicio" },
+        { id:"add",     icon:"+", label:"Agregar" },
+        { id:"history", icon:"≡", label:"Historial" },
+        { id:"settings",icon:"⚙", label:"Config" },
+      ];
+      return (
+        <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#0f1117", borderTop:"1px solid #252830", display:"flex", padding:"10px 0 env(safe-area-inset-bottom, 14px)", zIndex:100 }}>
+          {items.map(item=>(
+            <button key={item.id} onClick={()=>setTab(item.id)}
+              style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"3px", color:tab===item.id?"#4ade80":"#374151", transition:"color 0.15s" }}>
+              <span style={{ fontSize:item.id==="add"?"28px":"18px", lineHeight:"1" }}>{item.icon}</span>
+              <span style={{ fontSize:"9px", fontFamily:"monospace", letterSpacing:"0.5px" }}>{item.label.toUpperCase()}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MAIN APP
+    // ─────────────────────────────────────────────────────────────────────────
+    function App() {
+      const hasHash = () => !!LS.get("budget:pwHash");
+      const isAuthed = () => sessionStorage.getItem("budget:authed") === "1";
+
+      const [screen, setScreen] = useState(() => {
+        if (!hasHash()) return "setup";
+        if (!isAuthed()) return "login";
+        return "app";
+      });
+
+      const [tab, setTab]             = useState("home");
+      const [settings, setSettings]   = useState(() => LS.get("budget:settings") || DEFAULTS);
+      const [txs, setTxs]             = useState(() => LS.get("budget:transactions") || []);
+      const [viewMonth, setViewMonth] = useState(getMonthKey());
+
+      const saveSettings = (s) => { setSettings(s); LS.set("budget:settings", s); };
+
+      const addTransaction = (tx) => {
+        const next = [tx, ...txs];
+        setTxs(next); LS.set("budget:transactions", next);
+        setViewMonth(tx.month); setTab("home");
+      };
+
+      const deleteTransaction = (id) => {
+        const next = txs.filter(t=>t.id!==id);
+        setTxs(next); LS.set("budget:transactions", next);
+      };
+
+      const logout = () => {
+        sessionStorage.removeItem("budget:authed");
+        setScreen("login");
+      };
+
+      if (screen === "setup") return <SetupScreen onDone={()=>setScreen("app")} />;
+      if (screen === "login") return <LoginScreen onLogin={()=>setScreen("app")} />;
+
+      return (
+        <div style={{ background:"#0f1117", minHeight:"100vh", maxWidth:"430px", margin:"0 auto", color:"#e8e4dc", paddingBottom:"80px" }}>
+          {tab==="home"    &&<HomeTab     settings={settings} allTxs={txs} viewMonth={viewMonth} setViewMonth={setViewMonth} />}
+          {tab==="add"     &&<AddTab      onAdd={addTransaction} />}
+          {tab==="history" &&<HistoryTab  allTxs={txs} onDelete={deleteTransaction} viewMonth={viewMonth} setViewMonth={setViewMonth} />}
+          {tab==="settings"&&<SettingsTab settings={settings} onSave={saveSettings} onLogout={logout} />}
+          <BottomNav tab={tab} setTab={setTab} />
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
