@@ -24,48 +24,36 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // ── CONFIG ────────────────────────────────────────────────────────────────
     const SETUP_CODE = "U3J1KaeE";
 
-    // ── Crypto ────────────────────────────────────────────────────────────────
     async function sha256(str) {
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+      return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
     }
 
-    // ── LocalStorage ─────────────────────────────────────────────────────────
     const LS = {
       get(k)    { try { const v=localStorage.getItem(k); return v?JSON.parse(v):null; } catch { return null; } },
       set(k,v)  { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} },
       remove(k) { try { localStorage.removeItem(k); } catch {} },
     };
 
-    // ── Utilities ─────────────────────────────────────────────────────────────
-    const fmt = (n) =>
-      new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",maximumFractionDigits:0}).format(Math.abs(n));
+    const fmt = (n) => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",maximumFractionDigits:0}).format(Math.abs(n));
     const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
     const todayISO   = () => new Date().toISOString().split("T")[0];
     const getMonthKey= (d=new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const monthLabel = (k) => { const [y,m]=k.split("-"); return `${MONTHS[+m-1]} ${y}`; };
+    const shortMonth = (k) => { const [y,m]=k.split("-"); return `${MONTHS[+m-1].slice(0,3)} ${y}`; };
     const dayLabel   = (iso) => { const p=iso.split("-"); return `${+p[2]} ${MONTHS[+p[1]-1].slice(0,3)}`; };
     const prevKey    = (k) => { const [y,m]=k.split("-").map(Number); return getMonthKey(new Date(y,m-2,1)); };
     const nextKey    = (k) => { const [y,m]=k.split("-").map(Number); return getMonthKey(new Date(y,m,1)); };
+    const addMonths  = (k,n) => { const [y,m]=k.split("-").map(Number); return getMonthKey(new Date(y,m-1+n,1)); };
 
-    // ── Billing cycle logic ───────────────────────────────────────────────────
-    // Given a purchase date and a card's cutDay, returns the YYYY-MM when
-    // the charge will actually be paid (and thus counted in budget).
-    // Cash/debit cards have cutDay=null → billing month = purchase month.
     function getBillingMonth(dateISO, cutDay) {
-      if (!cutDay) return dateISO.slice(0,7); // cash/debit: same month
+      if (!cutDay) return dateISO.slice(0,7);
       const [y,m,d] = dateISO.split("-").map(Number);
-      // if purchase day <= cutDay → cycle closes this month → paid NEXT month
-      // if purchase day >  cutDay → cycle closes next month → paid MONTH AFTER NEXT
-      const monthsAhead = d <= cutDay ? 1 : 2;
-      const payDate = new Date(y, m - 1 + monthsAhead, 1);
-      return getMonthKey(payDate);
+      return getMonthKey(new Date(y, m-1+(d<=cutDay?1:2), 1));
     }
 
-    // ── Defaults ──────────────────────────────────────────────────────────────
     const DEFAULT_CARDS = [
       { id:"amex",     name:"Amex",     cutDay:17, payDay:6  },
       { id:"banamex",  name:"Banamex",  cutDay:14, payDay:3  },
@@ -89,14 +77,11 @@
       { id:"otros",           label:"Otros",           icon:"📦", color:"#9ca3af" },
     ];
 
-    // ── Shared styles ─────────────────────────────────────────────────────────
     const card  = { background:"#161920", border:"1px solid #252830", borderRadius:"14px", padding:"16px" };
     const navBtn= { background:"#161920", border:"1px solid #252830", borderRadius:"10px", color:"#9ca3af", fontSize:"20px", width:"38px", height:"38px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" };
     const inputSt={ background:"#1c1f27", border:"1px solid #252830", borderRadius:"8px", padding:"10px 14px", color:"#e8e4dc", fontSize:"15px", outline:"none", width:"100%" };
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // AUTH
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── AUTH ──────────────────────────────────────────────────────────────────
     function AuthShell({ children }) {
       return (
         <div style={{ background:"#0f1117", minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px" }}>
@@ -113,9 +98,9 @@
       const [code,setCode]=useState(""), [pw,setPw]=useState(""), [pw2,setPw2]=useState(""), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
       const go = async () => {
         setErr("");
-        if (code!==SETUP_CODE)  { setErr("Código de configuración incorrecto."); return; }
-        if (pw.length<6)        { setErr("Mínimo 6 caracteres."); return; }
-        if (pw!==pw2)           { setErr("Las contraseñas no coinciden."); return; }
+        if(code!==SETUP_CODE) { setErr("Código incorrecto."); return; }
+        if(pw.length<6)       { setErr("Mínimo 6 caracteres."); return; }
+        if(pw!==pw2)          { setErr("Las contraseñas no coinciden."); return; }
         setLoading(true);
         LS.set("budget:pwHash", await sha256(pw));
         sessionStorage.setItem("budget:authed","1");
@@ -125,19 +110,14 @@
         <AuthShell>
           <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>CONFIGURACIÓN INICIAL</div>
           <p style={{ fontSize:"13px", color:"#6b7280", marginBottom:"18px", lineHeight:"1.6" }}>Primera vez. Ingresa el código de configuración y crea tu contraseña.</p>
-          {[{l:"CÓDIGO DE CONFIGURACIÓN",v:code,s:setCode,t:"text",p:"········"},
-            {l:"CONTRASEÑA NUEVA",v:pw,s:setPw,t:"password",p:"mínimo 6 caracteres"},
-            {l:"CONFIRMAR CONTRASEÑA",v:pw2,s:setPw2,t:"password",p:"repite tu contraseña"}].map(f=>(
+          {[{l:"CÓDIGO DE CONFIGURACIÓN",v:code,s:setCode,t:"text"},{l:"CONTRASEÑA NUEVA",v:pw,s:setPw,t:"password"},{l:"CONFIRMAR",v:pw2,s:setPw2,t:"password"}].map(f=>(
             <div key={f.l} style={{ marginBottom:"12px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>{f.l}</div>
-              <input type={f.t} value={f.v} onChange={e=>f.s(e.target.value)} placeholder={f.p} onKeyDown={e=>e.key==="Enter"&&go()}
-                style={{ ...inputSt, fontFamily:f.t==="password"?"monospace":"inherit" }} />
+              <input type={f.t} value={f.v} onChange={e=>f.s(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} style={{ ...inputSt, fontFamily:f.t==="password"?"monospace":"inherit" }} />
             </div>
           ))}
           {err&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"12px", fontFamily:"monospace" }}>{err}</div>}
-          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>
-            {loading?"CREANDO...":"CREAR CONTRASEÑA"}
-          </button>
+          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>{loading?"...":"CREAR CONTRASEÑA"}</button>
         </AuthShell>
       );
     }
@@ -146,28 +126,22 @@
       const [pw,setPw]=useState(""), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
       const go = async () => {
         setErr(""); setLoading(true);
-        if (await sha256(pw) === LS.get("budget:pwHash")) {
-          sessionStorage.setItem("budget:authed","1"); onLogin();
-        } else { setErr("Contraseña incorrecta."); }
+        if(await sha256(pw)===LS.get("budget:pwHash")) { sessionStorage.setItem("budget:authed","1"); onLogin(); }
+        else { setErr("Contraseña incorrecta."); }
         setLoading(false);
       };
       return (
         <AuthShell>
           <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>INICIAR SESIÓN</div>
           <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>CONTRASEÑA</div>
-          <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} placeholder="tu contraseña"
-            onKeyDown={e=>e.key==="Enter"&&go()} autoFocus style={{ ...inputSt, fontFamily:"monospace", marginBottom:"12px" }} />
+          <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&go()} autoFocus style={{ ...inputSt, fontFamily:"monospace", marginBottom:"12px" }} />
           {err&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"12px", fontFamily:"monospace" }}>{err}</div>}
-          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>
-            {loading?"...":"ENTRAR"}
-          </button>
+          <button onClick={go} disabled={loading} style={{ width:"100%", padding:"14px", border:"none", borderRadius:"10px", background:"#4ade80", color:"#0f1117", fontSize:"15px", fontWeight:"700", cursor:"pointer" }}>{loading?"...":"ENTRAR"}</button>
         </AuthShell>
       );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // APP COMPONENTS
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── SHARED ────────────────────────────────────────────────────────────────
     function Bar({ pct, color, over }) {
       return (
         <div style={{ height:"5px", background:"#1c1f27", borderRadius:"3px", overflow:"hidden", marginTop:"6px" }}>
@@ -185,17 +159,16 @@
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px" }}>PRESUPUESTO</div>
             <div style={{ fontSize:"16px", color:"#e8e4dc", fontWeight:"500" }}>{monthLabel(viewMonth)}</div>
           </div>
-          <button style={{ ...navBtn, opacity:isCurrent?0.2:1 }} disabled={isCurrent}
-            onClick={()=>{ if(!isCurrent) setViewMonth(nextKey(viewMonth)); }}>›</button>
+          <button style={{ ...navBtn, opacity:isCurrent?0.2:1 }} disabled={isCurrent} onClick={()=>{ if(!isCurrent) setViewMonth(nextKey(viewMonth)); }}>›</button>
         </div>
       );
     }
 
     // ── HOME TAB ──────────────────────────────────────────────────────────────
     function HomeTab({ settings, allTxs, viewMonth, setViewMonth }) {
-      const monthTxs = allTxs.filter(t=>t.month===viewMonth);
+      const monthTxs   = allTxs.filter(t=>t.month===viewMonth);
       const totalFixed = Object.values(settings.fixed).reduce((s,v)=>s+v,0);
-      const freeMonthly = settings.salary - totalFixed;
+      const freeMonthly= settings.salary - totalFixed;
       const spentByCat = Object.fromEntries(CATS.map(c=>[c.id,0]));
       monthTxs.forEach(t=>{ if(!t.reimbursable) spentByCat[t.category]=(spentByCat[t.category]||0)+t.amount; });
       const totalSpent = Object.values(spentByCat).reduce((s,v)=>s+v,0);
@@ -207,18 +180,12 @@
       return (
         <div style={{ padding:"20px 16px" }}>
           <MonthNav viewMonth={viewMonth} setViewMonth={setViewMonth} />
-
           <div style={{ ...card, textAlign:"center", marginBottom:"14px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"10px" }}>DISPONIBLE ESTE MES</div>
-            <div style={{ fontSize:"44px", color:remColor, fontWeight:"300", letterSpacing:"-1px", lineHeight:"1" }}>
-              {remaining<0?"-":""}{fmt(remaining)}
-            </div>
-            <div style={{ fontSize:"12px", color:"#4b5563", marginTop:"6px" }}>
-              de {fmt(freeMonthly)} libre · <span style={{color:remColor}}>{pct}%</span> restante
-            </div>
+            <div style={{ fontSize:"44px", color:remColor, fontWeight:"300", letterSpacing:"-1px", lineHeight:"1" }}>{remaining<0?"-":""}{fmt(remaining)}</div>
+            <div style={{ fontSize:"12px", color:"#4b5563", marginTop:"6px" }}>de {fmt(freeMonthly)} libre · <span style={{color:remColor}}>{pct}%</span> restante</div>
             <Bar pct={pct} color={remColor} over={remaining<0} />
           </div>
-
           <div style={{ ...card, marginBottom:"14px" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px" }}>
               <span style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px" }}>FIJOS DEDUCIDOS</span>
@@ -230,7 +197,6 @@
               ))}
             </div>
           </div>
-
           <div style={{ ...card, marginBottom:reimbs.length>0?"14px":"0" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"16px" }}>POR CATEGORÍA</div>
             {CATS.map(cat=>{
@@ -256,16 +222,10 @@
             })}
             {totalSpent===0&&<div style={{ textAlign:"center", color:"#374151", fontSize:"13px", padding:"8px 0" }}>Sin gastos registrados aún</div>}
           </div>
-
           {reimbs.length>0&&(
             <div style={{ ...card, background:"#0d1a2d", border:"1px solid #1d3557" }}>
               <div style={{ fontSize:"10px", color:"#3b82f6", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"10px" }}>🏥 PENDIENTES DE REEMBOLSO</div>
-              {reimbs.map(t=>(
-                <div key={t.id} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", fontSize:"13px" }}>
-                  <span style={{ color:"#6b7280" }}>{t.desc||"Salud"}</span>
-                  <span style={{ fontFamily:"monospace", color:"#3b82f6" }}>{fmt(t.amount)}</span>
-                </div>
-              ))}
+              {reimbs.map(t=>(<div key={t.id} style={{ display:"flex", justifyContent:"space-between", padding:"4px 0", fontSize:"13px" }}><span style={{color:"#6b7280"}}>{t.desc||"Salud"}</span><span style={{fontFamily:"monospace",color:"#3b82f6"}}>{fmt(t.amount)}</span></div>))}
               <div style={{ fontSize:"10px", color:"#1d3557", marginTop:"8px", fontFamily:"monospace" }}>No cuentan contra tu presupuesto</div>
             </div>
           )}
@@ -275,21 +235,40 @@
 
     // ── ADD TAB ───────────────────────────────────────────────────────────────
     function AddTab({ onAdd, cards }) {
-      const [amount,setAmount]=useState(""), [cat,setCat]=useState(null), [cardId,setCardId]=useState(null),
-            [desc,setDesc]=useState(""), [reimb,setReimb]=useState(false), [date,setDate]=useState(todayISO()), [done,setDone]=useState(false);
-      const canAdd = parseFloat(amount)>0 && cat!==null && cardId!==null;
+      const [amount,setAmount]         = useState("");
+      const [cat,setCat]               = useState(null);
+      const [cardId,setCardId]         = useState(null);
+      const [payType,setPayType]       = useState("once"); // "once" | "msi"
+      const [msiMonths,setMsiMonths]   = useState("");
+      const [desc,setDesc]             = useState("");
+      const [reimb,setReimb]           = useState(false);
+      const [date,setDate]             = useState(todayISO());
+      const [done,setDone]             = useState(false);
 
       const selectedCard = cards.find(c=>c.id===cardId);
-      const billingMonth = selectedCard && date ? getBillingMonth(date, selectedCard.cutDay) : null;
+      const billingMonth = selectedCard&&date ? getBillingMonth(date, selectedCard.cutDay) : null;
+      const months       = parseInt(msiMonths)||0;
+      const lastMonth    = billingMonth&&months>1 ? addMonths(billingMonth, months-1) : null;
+      const monthly      = amount&&months>0 ? parseFloat(amount)/months : 0;
 
-      const submit = async () => {
+      const canAdd = parseFloat(amount)>0 && cat!==null && cardId!==null &&
+                     (payType==="once" || (payType==="msi" && months>=2));
+
+      const submit = () => {
         if(!canAdd) return;
-        await onAdd({
-          id:Date.now().toString(), date, month:billingMonth||date.slice(0,7),
-          category:cat, amount:parseFloat(amount), desc:desc.trim(),
-          reimbursable:cat==="salud"?reimb:false, cardId,
-        });
-        setAmount(""); setCat(null); setCardId(null); setDesc(""); setReimb(false); setDate(todayISO());
+        let txs = [];
+        if(payType==="once") {
+          txs = [{ id:Date.now().toString(), date, month:billingMonth||date.slice(0,7), category:cat, amount:parseFloat(amount), desc:desc.trim(), reimbursable:cat==="salud"?reimb:false, cardId }];
+        } else {
+          const msiId = `msi_${Date.now()}`;
+          const total  = parseFloat(amount);
+          const mAmt   = total / months;
+          for(let i=0;i<months;i++) {
+            txs.push({ id:`${Date.now()}_${i}`, date, month:addMonths(billingMonth,i), category:cat, amount:mAmt, desc:desc.trim(), reimbursable:false, cardId, isMsi:true, msiId, msiTotal:total, msiMonths:months, msiIndex:i+1 });
+          }
+        }
+        onAdd(txs);
+        setAmount(""); setCat(null); setCardId(null); setPayType("once"); setMsiMonths(""); setDesc(""); setReimb(false); setDate(todayISO());
         setDone(true); setTimeout(()=>setDone(false),1800);
       };
 
@@ -306,7 +285,9 @@
 
           {/* Amount */}
           <div style={{ ...card, marginBottom:"12px" }}>
-            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>CANTIDAD</div>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>
+              {payType==="msi" ? "MONTO TOTAL" : "CANTIDAD"}
+            </div>
             <div style={{ display:"flex", alignItems:"baseline", gap:"6px" }}>
               <span style={{ fontSize:"24px", color:"#4b5563" }}>$</span>
               <input type="number" inputMode="decimal" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"
@@ -319,19 +300,48 @@
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>CATEGORÍA</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"8px" }}>
               {CATS.map(c=>(
-                <button key={c.id} onClick={()=>{ setCat(c.id); if(c.id!=="salud") setReimb(false); }}
+                <button key={c.id} onClick={()=>{ setCat(c.id); if(c.id!=="salud") setReimb(false); if(c.id!=="salud"&&payType==="msi") {} }}
                   style={{ padding:"12px 6px", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"4px", border:cat===c.id?`2px solid ${c.color}`:"2px solid transparent", borderRadius:"10px", background:cat===c.id?`${c.color}18`:"#1c1f27", transition:"all 0.15s" }}>
                   <span style={{ fontSize:"20px" }}>{c.icon}</span>
                   <span style={{ fontSize:"10px", color:cat===c.id?c.color:"#6b7280", fontFamily:"monospace" }}>{c.label}</span>
                 </button>
               ))}
             </div>
-            {cat==="salud"&&(
+            {cat==="salud"&&payType==="once"&&(
               <div style={{ marginTop:"12px", display:"flex", alignItems:"center", gap:"12px" }}>
                 <div onClick={()=>setReimb(!reimb)} style={{ width:"42px", height:"24px", borderRadius:"12px", background:reimb?"#3b82f6":"#1c1f27", position:"relative", cursor:"pointer", transition:"background 0.2s", border:"1px solid #252830", flexShrink:0 }}>
                   <div style={{ width:"18px", height:"18px", borderRadius:"50%", background:"#e8e4dc", position:"absolute", top:"3px", left:reimb?"21px":"3px", transition:"left 0.2s" }} />
                 </div>
                 <span style={{ fontSize:"12px", color:"#6b7280", lineHeight:"1.4" }}>Me lo reembolsan</span>
+              </div>
+            )}
+          </div>
+
+          {/* Payment type: Único / MSI */}
+          <div style={{ ...card, marginBottom:"12px" }}>
+            <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>TIPO DE PAGO</div>
+            <div style={{ display:"flex", gap:"8px", marginBottom: payType==="msi"?"14px":"0" }}>
+              {[{id:"once",label:"Único"},{id:"msi",label:"MSI"}].map(t=>(
+                <button key={t.id} onClick={()=>setPayType(t.id)}
+                  style={{ flex:1, padding:"10px", border:payType===t.id?"2px solid #4ade80":"2px solid transparent", borderRadius:"8px", cursor:"pointer", background:payType===t.id?"#052e16":"#1c1f27", color:payType===t.id?"#4ade80":"#6b7280", fontSize:"14px", fontWeight:payType===t.id?"600":"400", fontFamily:"monospace", transition:"all 0.15s" }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {payType==="msi"&&(
+              <div>
+                <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>NÚMERO DE MESES</div>
+                <input type="number" inputMode="numeric" value={msiMonths} onChange={e=>setMsiMonths(e.target.value)} placeholder="ej. 12"
+                  style={{ ...inputSt, fontSize:"20px", fontFamily:"monospace", textAlign:"center" }} />
+                {months>=2&&amount&&(
+                  <div style={{ marginTop:"10px", padding:"10px 12px", background:"#0f1117", borderRadius:"8px", border:"1px solid #252830" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"4px" }}>
+                      <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>CARGO MENSUAL</span>
+                      <span style={{ fontSize:"15px", color:"#fbbf24", fontFamily:"monospace", fontWeight:"600" }}>{fmt(monthly)}/mes</span>
+                    </div>
+                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace" }}>× {months} meses = {fmt(parseFloat(amount))}</div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -347,12 +357,26 @@
                 </button>
               ))}
             </div>
-
-            {/* Billing month preview */}
-            {billingMonth && date && (
-              <div style={{ marginTop:"12px", padding:"10px 12px", background:"#0f1117", borderRadius:"8px", border:"1px solid #252830", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>SE CONTARÁ EN</span>
-                <span style={{ fontSize:"13px", color:"#4ade80", fontFamily:"monospace", fontWeight:"600" }}>{monthLabel(billingMonth)}</span>
+            {billingMonth&&(
+              <div style={{ marginTop:"12px", padding:"10px 12px", background:"#0f1117", borderRadius:"8px", border:"1px solid #252830" }}>
+                {payType==="once"?(
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>SE CONTARÁ EN</span>
+                    <span style={{ fontSize:"13px", color:"#4ade80", fontFamily:"monospace", fontWeight:"600" }}>{monthLabel(billingMonth)}</span>
+                  </div>
+                ):(
+                  months>=2?(
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>PERIODO</span>
+                      <span style={{ fontSize:"13px", color:"#4ade80", fontFamily:"monospace", fontWeight:"600" }}>{shortMonth(billingMonth)} → {shortMonth(addMonths(billingMonth,months-1))}</span>
+                    </div>
+                  ):(
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace" }}>PRIMER CARGO EN</span>
+                      <span style={{ fontSize:"13px", color:"#4ade80", fontFamily:"monospace", fontWeight:"600" }}>{monthLabel(billingMonth)}</span>
+                    </div>
+                  )
+                )}
               </div>
             )}
           </div>
@@ -360,11 +384,11 @@
           {/* Description */}
           <div style={{ ...card, marginBottom:"12px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>DESCRIPCIÓN (opcional)</div>
-            <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="ej. cena con amigos, recibo de luz..."
+            <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="ej. cena con amigos, nuevo sillón..."
               style={{ background:"transparent", border:"none", outline:"none", fontSize:"14px", color:"#9ca3af", width:"100%" }} />
           </div>
 
-          {/* Purchase date */}
+          {/* Date */}
           <div style={{ ...card, marginBottom:"22px" }}>
             <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"8px" }}>FECHA DE COMPRA</div>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)}
@@ -373,20 +397,21 @@
 
           <button onClick={submit} disabled={!canAdd}
             style={{ width:"100%", padding:"17px", border:"none", borderRadius:"12px", cursor:canAdd?"pointer":"default", background:canAdd?"#4ade80":"#1c1f27", color:canAdd?"#0f1117":"#374151", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", transition:"all 0.2s" }}>
-            REGISTRAR
+            {payType==="msi"&&months>=2 ? `REGISTRAR ${months} MESES` : "REGISTRAR"}
           </button>
         </div>
       );
     }
 
     // ── HISTORY TAB ───────────────────────────────────────────────────────────
-    function HistoryTab({ allTxs, onDelete, viewMonth, setViewMonth, cards }) {
+    function HistoryTab({ allTxs, onDelete, onDeleteMsi, viewMonth, setViewMonth, cards }) {
       const monthTxs = allTxs.filter(t=>t.month===viewMonth).sort((a,b)=>b.date.localeCompare(a.date));
-      const isCurrent = viewMonth===getMonthKey();
-      const grouped = {};
+      const isCurrent= viewMonth===getMonthKey();
+      const grouped  = {};
       monthTxs.forEach(t=>{ if(!grouped[t.date]) grouped[t.date]=[]; grouped[t.date].push(t); });
-      const dates = Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
-      const total = monthTxs.filter(t=>!t.reimbursable).reduce((s,t)=>s+t.amount,0);
+      const dates    = Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+      const total    = monthTxs.filter(t=>!t.reimbursable).reduce((s,t)=>s+t.amount,0);
+      const [confirmId, setConfirmId] = useState(null);
 
       return (
         <div style={{ padding:"20px 16px" }}>
@@ -403,20 +428,41 @@
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"7px" }}>{dayLabel(date)}</div>
               {grouped[date].map(tx=>{
                 const cat  = CATS.find(c=>c.id===tx.category)||CATS[4];
-                const card2= cards.find(c=>c.id===tx.cardId);
+                const cardObj = cards.find(c=>c.id===tx.cardId);
+                const isConfirming = confirmId===tx.id;
                 return (
-                  <div key={tx.id} style={{ ...card, display:"flex", alignItems:"center", gap:"12px", marginBottom:"7px", borderLeft:`3px solid ${tx.reimbursable?"#3b82f6":cat.color}30` }}>
-                    <span style={{ fontSize:"20px" }}>{cat.icon}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:"13px", color:tx.reimbursable?"#3b82f6":"#9ca3af", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tx.desc||cat.label}</div>
-                      <div style={{ display:"flex", gap:"6px", alignItems:"center", marginTop:"2px" }}>
-                        <span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace" }}>{cat.label}</span>
-                        {card2&&<span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace", background:"#1c1f27", padding:"1px 5px", borderRadius:"3px" }}>{card2.name}</span>}
-                        {tx.reimbursable&&<span style={{ fontSize:"9px", color:"#3b82f6", fontFamily:"monospace", background:"#0d1a2d", padding:"1px 5px", borderRadius:"3px" }}>REEMBOLSABLE</span>}
+                  <div key={tx.id} style={{ ...card, marginBottom:"7px", borderLeft:`3px solid ${tx.reimbursable?"#3b82f6":tx.isMsi?"#f59e0b":cat.color}30` }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
+                      <span style={{ fontSize:"20px" }}>{cat.icon}</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:"13px", color:tx.reimbursable?"#3b82f6":"#9ca3af", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tx.desc||cat.label}</div>
+                        <div style={{ display:"flex", gap:"5px", alignItems:"center", marginTop:"2px", flexWrap:"wrap" }}>
+                          <span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace" }}>{cat.label}</span>
+                          {cardObj&&<span style={{ fontSize:"10px", color:"#374151", fontFamily:"monospace", background:"#1c1f27", padding:"1px 5px", borderRadius:"3px" }}>{cardObj.name}</span>}
+                          {tx.isMsi&&<span style={{ fontSize:"9px", color:"#f59e0b", fontFamily:"monospace", background:"#1c1206", padding:"1px 5px", borderRadius:"3px" }}>MSI {tx.msiIndex}/{tx.msiMonths}</span>}
+                          {tx.reimbursable&&<span style={{ fontSize:"9px", color:"#3b82f6", fontFamily:"monospace", background:"#0d1a2d", padding:"1px 5px", borderRadius:"3px" }}>REEMBOLSABLE</span>}
+                        </div>
                       </div>
+                      <span style={{ fontFamily:"monospace", fontSize:"14px", color:tx.reimbursable?"#3b82f6":"#e8e4dc", flexShrink:0 }}>{fmt(tx.amount)}</span>
+                      <button onClick={()=>{ if(tx.isMsi) setConfirmId(isConfirming?null:tx.id); else onDelete(tx.id); }}
+                        style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:"20px", padding:"4px", flexShrink:0, lineHeight:"1" }}>×</button>
                     </div>
-                    <span style={{ fontFamily:"monospace", fontSize:"14px", color:tx.reimbursable?"#3b82f6":"#e8e4dc", flexShrink:0 }}>{fmt(tx.amount)}</span>
-                    <button onClick={()=>onDelete(tx.id)} style={{ background:"none", border:"none", color:"#374151", cursor:"pointer", fontSize:"20px", padding:"4px", flexShrink:0, lineHeight:"1" }}>×</button>
+                    {/* MSI delete confirmation */}
+                    {isConfirming&&(
+                      <div style={{ marginTop:"10px", paddingTop:"10px", borderTop:"1px solid #252830" }}>
+                        <div style={{ fontSize:"11px", color:"#f59e0b", fontFamily:"monospace", marginBottom:"8px" }}>¿Qué quieres eliminar?</div>
+                        <div style={{ display:"flex", gap:"8px" }}>
+                          <button onClick={()=>{ onDelete(tx.id); setConfirmId(null); }}
+                            style={{ flex:1, padding:"9px", border:"1px solid #252830", borderRadius:"8px", background:"transparent", color:"#9ca3af", fontSize:"12px", cursor:"pointer", fontFamily:"monospace" }}>
+                            Solo este mes
+                          </button>
+                          <button onClick={()=>{ onDeleteMsi(tx.msiId); setConfirmId(null); }}
+                            style={{ flex:1, padding:"9px", border:"1px solid #ef4444", borderRadius:"8px", background:"transparent", color:"#ef4444", fontSize:"12px", cursor:"pointer", fontFamily:"monospace" }}>
+                            Todos los meses
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -430,68 +476,48 @@
     function SettingsTab({ settings, onSave, onLogout }) {
       const [local,setLocal]     = useState({ salary:settings.salary, fixed:{...settings.fixed}, budgets:{...settings.budgets}, cards:[...settings.cards] });
       const [saved,setSaved]     = useState(false);
-      const [section,setSection] = useState("budget"); // budget | cards | password
+      const [section,setSection] = useState("budget");
       const [oldPw,setOldPw]=useState(""), [newPw,setNewPw]=useState(""), [newPw2,setNewPw2]=useState(""), [pwErr,setPwErr]=useState(""), [pwOk,setPwOk]=useState(false);
       const [newCard,setNewCard] = useState({ name:"", cutDay:"", payDay:"" });
-      const [editCard,setEditCard]= useState(null); // id of card being edited
+      const [editCard,setEditCard]= useState(null);
 
       const handleSave = () => {
-        const clean = {
-          salary:parseFloat(local.salary)||0,
-          fixed:Object.fromEntries(Object.entries(local.fixed).map(([k,v])=>[k,parseFloat(v)||0])),
-          budgets:Object.fromEntries(Object.entries(local.budgets).map(([k,v])=>[k,parseFloat(v)||0])),
-          cards:local.cards,
-        };
+        const clean = { salary:parseFloat(local.salary)||0, fixed:Object.fromEntries(Object.entries(local.fixed).map(([k,v])=>[k,parseFloat(v)||0])), budgets:Object.fromEntries(Object.entries(local.budgets).map(([k,v])=>[k,parseFloat(v)||0])), cards:local.cards };
         onSave(clean); setSaved(true); setTimeout(()=>setSaved(false),2000);
       };
-
       const handleChangePw = async () => {
         setPwErr("");
         if(await sha256(oldPw)!==LS.get("budget:pwHash")) { setPwErr("Contraseña actual incorrecta."); return; }
-        if(newPw.length<6)  { setPwErr("Mínimo 6 caracteres."); return; }
-        if(newPw!==newPw2)  { setPwErr("Las contraseñas no coinciden."); return; }
+        if(newPw.length<6) { setPwErr("Mínimo 6 caracteres."); return; }
+        if(newPw!==newPw2) { setPwErr("No coinciden."); return; }
         LS.set("budget:pwHash", await sha256(newPw));
         setOldPw(""); setNewPw(""); setNewPw2(""); setPwOk(true); setTimeout(()=>setPwOk(false),3000);
       };
-
       const addCard = () => {
         if(!newCard.name) return;
         const c = { id:Date.now().toString(), name:newCard.name, cutDay:newCard.cutDay?parseInt(newCard.cutDay):null, payDay:newCard.payDay?parseInt(newCard.payDay):null };
         setLocal(s=>({...s,cards:[...s.cards,c]}));
         setNewCard({ name:"", cutDay:"", payDay:"" });
       };
-
-      const removeCard = (id) => setLocal(s=>({...s,cards:s.cards.filter(c=>c.id!==id)}));
-
-      const updateCard = (id, field, val) => setLocal(s=>({...s,cards:s.cards.map(c=>c.id===id?{...c,[field]:field==="name"?val:(val?parseInt(val):null)}:c)}));
-
-      const totalFixed = Object.values(local.fixed).reduce((s,v)=>s+(parseFloat(v)||0),0);
-      const free = (parseFloat(local.salary)||0)-totalFixed;
-
-      const NumField = ({label,value,onChange}) => (
+      const removeCard  = (id) => setLocal(s=>({...s,cards:s.cards.filter(c=>c.id!==id)}));
+      const updateCard  = (id,field,val) => setLocal(s=>({...s,cards:s.cards.map(c=>c.id===id?{...c,[field]:field==="name"?val:(val?parseInt(val):null)}:c)}));
+      const totalFixed  = Object.values(local.fixed).reduce((s,v)=>s+(parseFloat(v)||0),0);
+      const free        = (parseFloat(local.salary)||0)-totalFixed;
+      const NumField    = ({label,value,onChange}) => (
         <div style={{ display:"flex", alignItems:"center", gap:"10px", marginBottom:"10px" }}>
           <span style={{ fontSize:"12px", color:"#6b7280", width:"100px", flexShrink:0 }}>{label}</span>
           <input type="number" value={value} onChange={onChange} style={{ ...inputSt, flex:1 }} />
         </div>
       );
-
-      const tabs = [{id:"budget",l:"Presupuesto"},{id:"cards",l:"Tarjetas"},{id:"password",l:"Contraseña"}];
+      const stabs = [{id:"budget",l:"Presupuesto"},{id:"cards",l:"Tarjetas"},{id:"password",l:"Contraseña"}];
 
       return (
         <div style={{ padding:"20px 16px" }}>
           <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"2px", marginBottom:"16px" }}>CONFIGURACIÓN</div>
-
-          {/* Sub-tabs */}
           <div style={{ display:"flex", gap:"6px", marginBottom:"18px" }}>
-            {tabs.map(t=>(
-              <button key={t.id} onClick={()=>setSection(t.id)}
-                style={{ flex:1, padding:"8px 4px", border:"none", borderRadius:"8px", cursor:"pointer", fontSize:"11px", fontFamily:"monospace", background:section===t.id?"#e8e4dc":"#1c1f27", color:section===t.id?"#0f1117":"#6b7280", transition:"all 0.15s" }}>
-                {t.l.toUpperCase()}
-              </button>
-            ))}
+            {stabs.map(t=>(<button key={t.id} onClick={()=>setSection(t.id)} style={{ flex:1, padding:"8px 4px", border:"none", borderRadius:"8px", cursor:"pointer", fontSize:"11px", fontFamily:"monospace", background:section===t.id?"#e8e4dc":"#1c1f27", color:section===t.id?"#0f1117":"#6b7280" }}>{t.l.toUpperCase()}</button>))}
           </div>
 
-          {/* BUDGET section */}
           {section==="budget"&&<>
             <div style={{ ...card, marginBottom:"12px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>SALARIO MENSUAL</div>
@@ -499,12 +525,8 @@
             </div>
             <div style={{ ...card, marginBottom:"12px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>GASTOS FIJOS / MES</div>
-              {Object.entries(local.fixed).map(([k,v])=>(
-                <NumField key={k} label={k} value={v} onChange={e=>setLocal(s=>({...s,fixed:{...s.fixed,[k]:e.target.value}}))} />
-              ))}
-              <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", textAlign:"right", marginTop:"8px", paddingTop:"8px", borderTop:"1px solid #252830" }}>
-                Libre tras fijos: <span style={{color:"#fbbf24"}}>{fmt(free)}</span>
-              </div>
+              {Object.entries(local.fixed).map(([k,v])=>(<NumField key={k} label={k} value={v} onChange={e=>setLocal(s=>({...s,fixed:{...s.fixed,[k]:e.target.value}}))} />))}
+              <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", textAlign:"right", marginTop:"8px", paddingTop:"8px", borderTop:"1px solid #252830" }}>Libre tras fijos: <span style={{color:"#fbbf24"}}>{fmt(free)}</span></div>
             </div>
             <div style={{ ...card, marginBottom:"20px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"12px" }}>PRESUPUESTO VARIABLE / MES</div>
@@ -516,13 +538,8 @@
                 </div>
               ))}
             </div>
-            <button onClick={handleSave}
-              style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", marginBottom:"12px" }}>
-              {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
-            </button>
           </>}
 
-          {/* CARDS section */}
           {section==="cards"&&<>
             <div style={{ ...card, marginBottom:"12px" }}>
               <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"14px" }}>TUS TARJETAS</div>
@@ -530,14 +547,14 @@
                 <div key={c.id} style={{ marginBottom:"12px", paddingBottom:"12px", borderBottom:"1px solid #252830" }}>
                   {editCard===c.id?(
                     <div>
-                      <input value={c.name} onChange={e=>updateCard(c.id,"name",e.target.value)} placeholder="Nombre" style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
+                      <input value={c.name} onChange={e=>updateCard(c.id,"name",e.target.value)} style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
                       <div style={{ display:"flex", gap:"8px", marginBottom:"8px" }}>
                         <div style={{ flex:1 }}>
-                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE CORTE</div>
+                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA CORTE</div>
                           <input type="number" value={c.cutDay||""} onChange={e=>updateCard(c.id,"cutDay",e.target.value)} placeholder="ej. 17" style={{ ...inputSt, fontSize:"13px" }} />
                         </div>
                         <div style={{ flex:1 }}>
-                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE PAGO</div>
+                          <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA PAGO</div>
                           <input type="number" value={c.payDay||""} onChange={e=>updateCard(c.id,"payDay",e.target.value)} placeholder="ej. 6" style={{ ...inputSt, fontSize:"13px" }} />
                         </div>
                       </div>
@@ -547,9 +564,7 @@
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                       <div>
                         <div style={{ fontSize:"14px", color:"#e8e4dc" }}>{c.name}</div>
-                        <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", marginTop:"2px" }}>
-                          {c.cutDay?`Corte: ${c.cutDay} · Pago: ${c.payDay}`:"Efectivo / Débito"}
-                        </div>
+                        <div style={{ fontSize:"11px", color:"#4b5563", fontFamily:"monospace", marginTop:"2px" }}>{c.cutDay?`Corte: ${c.cutDay} · Pago: ${c.payDay}`:"Efectivo / Débito"}</div>
                       </div>
                       <div style={{ display:"flex", gap:"8px" }}>
                         <button onClick={()=>setEditCard(c.id)} style={{ background:"#1c1f27", border:"none", color:"#9ca3af", padding:"6px 12px", borderRadius:"6px", cursor:"pointer", fontSize:"12px" }}>Editar</button>
@@ -559,52 +574,38 @@
                   )}
                 </div>
               ))}
-
-              {/* Add new card */}
               <div style={{ marginTop:"4px" }}>
                 <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"10px" }}>AGREGAR TARJETA</div>
-                <input value={newCard.name} onChange={e=>setNewCard(s=>({...s,name:e.target.value}))} placeholder="Nombre de la tarjeta" style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
+                <input value={newCard.name} onChange={e=>setNewCard(s=>({...s,name:e.target.value}))} placeholder="Nombre" style={{ ...inputSt, marginBottom:"8px", fontSize:"13px" }} />
                 <div style={{ display:"flex", gap:"8px", marginBottom:"10px" }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE CORTE</div>
-                    <input type="number" value={newCard.cutDay} onChange={e=>setNewCard(s=>({...s,cutDay:e.target.value}))} placeholder="ej. 17" style={{ ...inputSt, fontSize:"13px" }} />
-                  </div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA DE PAGO</div>
-                    <input type="number" value={newCard.payDay} onChange={e=>setNewCard(s=>({...s,payDay:e.target.value}))} placeholder="ej. 6" style={{ ...inputSt, fontSize:"13px" }} />
-                  </div>
+                  <div style={{ flex:1 }}><div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA CORTE</div><input type="number" value={newCard.cutDay} onChange={e=>setNewCard(s=>({...s,cutDay:e.target.value}))} placeholder="17" style={{ ...inputSt, fontSize:"13px" }} /></div>
+                  <div style={{ flex:1 }}><div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", marginBottom:"4px" }}>DÍA PAGO</div><input type="number" value={newCard.payDay} onChange={e=>setNewCard(s=>({...s,payDay:e.target.value}))} placeholder="6" style={{ ...inputSt, fontSize:"13px" }} /></div>
                 </div>
-                <button onClick={addCard} disabled={!newCard.name}
-                  style={{ width:"100%", padding:"12px", border:"none", borderRadius:"8px", cursor:newCard.name?"pointer":"default", background:newCard.name?"#1c1f27":"#161920", color:newCard.name?"#9ca3af":"#374151", fontSize:"13px", fontFamily:"monospace" }}>
-                  + AGREGAR
-                </button>
+                <button onClick={addCard} disabled={!newCard.name} style={{ width:"100%", padding:"12px", border:"none", borderRadius:"8px", cursor:newCard.name?"pointer":"default", background:newCard.name?"#1c1f27":"#161920", color:newCard.name?"#9ca3af":"#374151", fontSize:"13px", fontFamily:"monospace" }}>+ AGREGAR</button>
               </div>
             </div>
-            <button onClick={handleSave}
-              style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", marginBottom:"12px" }}>
-              {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
-            </button>
           </>}
 
-          {/* PASSWORD section */}
           {section==="password"&&<>
             <div style={{ ...card, marginBottom:"12px" }}>
-              {[{l:"CONTRASEÑA ACTUAL",v:oldPw,s:setOldPw},{l:"CONTRASEÑA NUEVA",v:newPw,s:setNewPw},{l:"CONFIRMAR NUEVA",v:newPw2,s:setNewPw2}].map(f=>(
+              {[{l:"CONTRASEÑA ACTUAL",v:oldPw,s:setOldPw},{l:"CONTRASEÑA NUEVA",v:newPw,s:setNewPw},{l:"CONFIRMAR",v:newPw2,s:setNewPw2}].map(f=>(
                 <div key={f.l} style={{ marginBottom:"12px" }}>
                   <div style={{ fontSize:"10px", color:"#4b5563", fontFamily:"monospace", letterSpacing:"1px", marginBottom:"5px" }}>{f.l}</div>
                   <input type="password" value={f.v} onChange={e=>f.s(e.target.value)} style={{ ...inputSt, fontFamily:"monospace" }} />
                 </div>
               ))}
               {pwErr&&<div style={{ fontSize:"12px", color:"#ef4444", marginBottom:"10px", fontFamily:"monospace" }}>{pwErr}</div>}
-              {pwOk&&<div style={{ fontSize:"12px", color:"#4ade80", marginBottom:"10px", fontFamily:"monospace" }}>✓ Contraseña actualizada</div>}
+              {pwOk&&<div style={{ fontSize:"12px", color:"#4ade80", marginBottom:"10px", fontFamily:"monospace" }}>✓ Actualizada</div>}
               <button onClick={handleChangePw} style={{ width:"100%", padding:"12px", border:"none", borderRadius:"10px", cursor:"pointer", background:"#3b82f6", color:"#fff", fontSize:"14px", fontWeight:"700" }}>ACTUALIZAR</button>
             </div>
           </>}
 
-          <button onClick={onLogout}
-            style={{ width:"100%", padding:"14px", border:"1px solid #252830", borderRadius:"12px", cursor:"pointer", background:"transparent", color:"#6b7280", fontSize:"14px", letterSpacing:"1px", fontFamily:"monospace" }}>
-            CERRAR SESIÓN
-          </button>
+          {section!=="password"&&(
+            <button onClick={handleSave} style={{ width:"100%", padding:"15px", border:saved?"1px solid #4ade80":"none", borderRadius:"12px", cursor:"pointer", background:saved?"transparent":"#4ade80", color:saved?"#4ade80":"#0f1117", fontSize:"15px", fontWeight:"700", letterSpacing:"1px", marginBottom:"12px" }}>
+              {saved?"✓ GUARDADO":"GUARDAR CAMBIOS"}
+            </button>
+          )}
+          <button onClick={onLogout} style={{ width:"100%", padding:"14px", border:"1px solid #252830", borderRadius:"12px", cursor:"pointer", background:"transparent", color:"#6b7280", fontSize:"14px", letterSpacing:"1px", fontFamily:"monospace" }}>CERRAR SESIÓN</button>
         </div>
       );
     }
@@ -614,18 +615,12 @@
       const items=[{id:"home",icon:"⊙",label:"Inicio"},{id:"add",icon:"+",label:"Agregar"},{id:"history",icon:"≡",label:"Historial"},{id:"settings",icon:"⚙",label:"Config"}];
       return (
         <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#0f1117", borderTop:"1px solid #252830", display:"flex", padding:"10px 0 env(safe-area-inset-bottom,14px)", zIndex:100 }}>
-          {items.map(item=>(
-            <button key={item.id} onClick={()=>setTab(item.id)}
-              style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"3px", color:tab===item.id?"#4ade80":"#374151", transition:"color 0.15s" }}>
-              <span style={{ fontSize:item.id==="add"?"28px":"18px", lineHeight:"1" }}>{item.icon}</span>
-              <span style={{ fontSize:"9px", fontFamily:"monospace", letterSpacing:"0.5px" }}>{item.label.toUpperCase()}</span>
-            </button>
-          ))}
+          {items.map(item=>(<button key={item.id} onClick={()=>setTab(item.id)} style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:"3px", color:tab===item.id?"#4ade80":"#374151", transition:"color 0.15s" }}><span style={{ fontSize:item.id==="add"?"28px":"18px", lineHeight:"1" }}>{item.icon}</span><span style={{ fontSize:"9px", fontFamily:"monospace", letterSpacing:"0.5px" }}>{item.label.toUpperCase()}</span></button>))}
         </div>
       );
     }
 
-    // ── MAIN APP ──────────────────────────────────────────────────────────────
+    // ── MAIN ──────────────────────────────────────────────────────────────────
     function App() {
       const [screen,setScreen]       = useState(()=>{ if(!LS.get("budget:pwHash")) return "setup"; if(sessionStorage.getItem("budget:authed")!=="1") return "login"; return "app"; });
       const [tab,setTab]             = useState("home");
@@ -633,21 +628,21 @@
       const [txs,setTxs]             = useState(()=>LS.get("budget:transactions")||[]);
       const [viewMonth,setViewMonth] = useState(getMonthKey());
 
-      const saveSettings = (s) => { setSettings(s); LS.set("budget:settings",s); };
-      const addTransaction = (tx) => { const next=[tx,...txs]; setTxs(next); LS.set("budget:transactions",next); setViewMonth(tx.month); setTab("home"); };
-      const deleteTransaction = (id) => { const next=txs.filter(t=>t.id!==id); setTxs(next); LS.set("budget:transactions",next); };
-      const logout = () => { sessionStorage.removeItem("budget:authed"); setScreen("login"); };
+      const saveSettings      = (s)   => { setSettings(s); LS.set("budget:settings",s); };
+      const addTransactions   = (arr) => { const next=[...arr,...txs]; setTxs(next); LS.set("budget:transactions",next); setViewMonth(arr[0].month); setTab("home"); };
+      const deleteTransaction = (id)  => { const next=txs.filter(t=>t.id!==id); setTxs(next); LS.set("budget:transactions",next); };
+      const deleteMsi         = (msiId)=>{ const next=txs.filter(t=>t.msiId!==msiId); setTxs(next); LS.set("budget:transactions",next); };
+      const logout            = ()    => { sessionStorage.removeItem("budget:authed"); setScreen("login"); };
 
       if(screen==="setup") return <SetupScreen onDone={()=>setScreen("app")} />;
       if(screen==="login") return <LoginScreen onLogin={()=>setScreen("app")} />;
 
       const cards = settings.cards || DEFAULTS.cards;
-
       return (
         <div style={{ background:"#0f1117", minHeight:"100vh", maxWidth:"430px", margin:"0 auto", color:"#e8e4dc", paddingBottom:"80px" }}>
           {tab==="home"    &&<HomeTab     settings={settings} allTxs={txs} viewMonth={viewMonth} setViewMonth={setViewMonth} />}
-          {tab==="add"     &&<AddTab      onAdd={addTransaction} cards={cards} />}
-          {tab==="history" &&<HistoryTab  allTxs={txs} onDelete={deleteTransaction} viewMonth={viewMonth} setViewMonth={setViewMonth} cards={cards} />}
+          {tab==="add"     &&<AddTab      onAdd={addTransactions} cards={cards} />}
+          {tab==="history" &&<HistoryTab  allTxs={txs} onDelete={deleteTransaction} onDeleteMsi={deleteMsi} viewMonth={viewMonth} setViewMonth={setViewMonth} cards={cards} />}
           {tab==="settings"&&<SettingsTab settings={settings} onSave={saveSettings} onLogout={logout} />}
           <BottomNav tab={tab} setTab={setTab} />
         </div>
